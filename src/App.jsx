@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, RotateCcw, Download, Type, Grid } from 'lucide-react';
 
-export default function PixelMoireGenerator() {
+const PixelMoireGenerator = () => {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const [isAnimating, setIsAnimating] = useState(false);
@@ -138,21 +138,21 @@ export default function PixelMoireGenerator() {
     audioSensitivity: 1.5
   });
 
-  const getAudioDevices = async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const audioInputs = devices.filter(device => device.kind === 'audioinput');
-      setAudioDevices(audioInputs);
-      
-      if (audioInputs.length > 0 && !selectedAudioDevice) {
-        setSelectedAudioDevice(audioInputs[0].deviceId);
-      }
-    } catch (err) {
-      console.error('Failed to enumerate devices:', err);
-    }
-  };
-
   useEffect(() => {
+    const getAudioDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        setAudioDevices(audioInputs);
+        
+        if (audioInputs.length > 0 && !selectedAudioDevice) {
+          setSelectedAudioDevice(audioInputs[0].deviceId);
+        }
+      } catch (err) {
+        console.error('Failed to enumerate devices:', err);
+      }
+    };
+
     getAudioDevices();
     
     navigator.mediaDevices.addEventListener('devicechange', getAudioDevices);
@@ -270,7 +270,7 @@ export default function PixelMoireGenerator() {
         
       } catch (err) {
         console.error('Audio access failed:', err);
-        alert('Audio Error: ' + err.message + '\n\n1. Allow microphone/audio when prompted\n2. Select BlackHole from dropdown\n3. Make sure audio is routed to BlackHole');
+        alert('Audio Error: ' + err.message + '\n\nTry opening this in your web browser (Chrome/Firefox) instead of Claude Desktop app. The desktop app may have audio restrictions.\n\nOr check:\n1. Browser permissions for microphone\n2. UAD Volt is selected as input in system settings\n3. UAD Volt driver is installed');
       }
     };
 
@@ -533,4 +533,590 @@ export default function PixelMoireGenerator() {
           const b = imageData.data[sampleIndex + 2];
           const a = imageData.data[sampleIndex + 3];
           for (let py = y; py < Math.min(y + currentSettings.pixelSize, height); py++) {
-            for (let px = x; px
+            for (let px = x; px < Math.min(x + currentSettings.pixelSize, width); px++) {
+              const index = (py * width + px) * 4;
+              pixelatedData.data[index] = r;
+              pixelatedData.data[index + 1] = g;
+              pixelatedData.data[index + 2] = b;
+              pixelatedData.data[index + 3] = a;
+            }
+          }
+        }
+      }
+      ctx.putImageData(pixelatedData, 0, 0);
+    }
+    
+    if (currentSettings.showGrid) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
+      ctx.lineWidth = 1;
+      const cellSize = Math.min(width, height) / currentSettings.gridSize;
+      for (let i = 0; i <= currentSettings.gridSize; i++) {
+        const pos = i * cellSize;
+        ctx.beginPath();
+        ctx.moveTo(pos, 0);
+        ctx.lineTo(pos, height);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, pos);
+        ctx.lineTo(width, pos);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    
+    currentPattern.current = { settings: currentSettings, time: animTime };
+  };
+  
+  const drawPattern = (ctx, width, height, animTime, settings, isPrevious) => {
+    if (settings.patternType === 'vertical-lines') {
+      for (let x = 0; x < width; x += settings.spacing) {
+        ctx.beginPath();
+        let firstPoint = true;
+        for (let y = 0; y < height; y += 1) {
+          let drawX = x;
+          let drawY = y;
+          if (settings.distortionEnabled) {
+            const distortion = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
+            drawX += distortion.x;
+            drawY += distortion.y;
+          }
+          if (firstPoint) {
+            ctx.moveTo(drawX, drawY);
+            firstPoint = false;
+          } else {
+            ctx.lineTo(drawX, drawY);
+          }
+        }
+        ctx.lineWidth = settings.lineThickness;
+        ctx.stroke();
+      }
+    } else if (settings.patternType === 'horizontal-lines') {
+      for (let y = 0; y < height; y += settings.spacing) {
+        ctx.beginPath();
+        let firstPoint = true;
+        for (let x = 0; x < width; x += 1) {
+          let drawX = x;
+          let drawY = y;
+          if (settings.distortionEnabled) {
+            const distortion = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
+            drawX += distortion.x;
+            drawY += distortion.y;
+          }
+          if (firstPoint) {
+            ctx.moveTo(drawX, drawY);
+            firstPoint = false;
+          } else {
+            ctx.lineTo(drawX, drawY);
+          }
+        }
+        ctx.lineWidth = settings.lineThickness;
+        ctx.stroke();
+      }
+    } else if (settings.patternType === 'checkerboard') {
+      const cellSize = settings.spacing;
+      for (let y = 0; y < height; y += cellSize) {
+        for (let x = 0; x < width; x += cellSize) {
+          let drawX = x;
+          let drawY = y;
+          if (settings.distortionEnabled) {
+            const distortion = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
+            drawX += distortion.x;
+            drawY += distortion.y;
+          }
+          if ((Math.floor(x / cellSize) + Math.floor(y / cellSize)) % 2 === 0) {
+            ctx.fillRect(drawX, drawY, cellSize, cellSize);
+          }
+        }
+      }
+    }
+    
+    if (settings.shapeEnabled) {
+      ctx.save();
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const shapeSize = Math.min(width, height) * (settings.shapeSize / 100);
+      
+      if (settings.distortionEnabled) {
+        const resolution = 200;
+        const tempCanvas = document.createElement('canvas');
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCanvas.width = resolution;
+        tempCanvas.height = resolution;
+        
+        tempCtx.strokeStyle = '#000000';
+        tempCtx.lineWidth = 3;
+        shapes[settings.shapeIndex].draw(tempCtx, resolution);
+        
+        const imageData = tempCtx.getImageData(0, 0, resolution, resolution);
+        const sampleSize = 2;
+        
+        for (let y = 0; y < resolution; y += sampleSize) {
+          for (let x = 0; x < resolution; x += sampleSize) {
+            const index = (y * resolution + x) * 4;
+            const alpha = imageData.data[index + 3];
+            
+            if (alpha > 50) {
+              const relativeX = (x - resolution/2) / resolution * shapeSize;
+              const relativeY = (y - resolution/2) / resolution * shapeSize;
+              const worldX = centerX + relativeX;
+              const worldY = centerY + relativeY;
+              const distortion = getDistortion(worldX - width/2, worldY - height/2, animTime + (x + y) * 0.01, settings.distortionStrength, settings.distortionType);
+              const finalX = worldX + distortion.x * 1.2;
+              const finalY = worldY + distortion.y * 1.2;
+              const pixelSize = Math.max(2, shapeSize / 100);
+              ctx.fillRect(finalX - pixelSize/2, finalY - pixelSize/2, pixelSize, pixelSize);
+            }
+          }
+        }
+      } else {
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 5;
+        ctx.translate(-shapeSize/2, -shapeSize/2);
+        shapes[settings.shapeIndex].draw(ctx, shapeSize);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+    
+    if (settings.textEnabled && settings.text) {
+      ctx.save();
+      const canvasSize = Math.max(width, height);
+      let fontSize = canvasSize * 0.6;
+      const textLength = settings.text.length;
+      if (textLength > 1) {
+        fontSize = fontSize / Math.sqrt(textLength * 0.5);
+      }
+      fontSize = fontSize * (settings.fontSize / 100);
+      const centerX = width / 2;
+      const centerY = height / 2;
+      
+      if (settings.distortionEnabled) {
+        const chars = settings.text.split('');
+        ctx.font = '900 ' + fontSize + 'px "' + settings.font + '", Impact, Arial Black, sans-serif';
+        const totalWidth = ctx.measureText(settings.text).width;
+        const charWidth = totalWidth / chars.length;
+        chars.forEach((char, charIndex) => {
+          const charBaseX = centerX - totalWidth/2 + charIndex * charWidth + charWidth/2;
+          const charBaseY = centerY;
+          const tempCanvas = document.createElement('canvas');
+          const tempCtx = tempCanvas.getContext('2d');
+          const resolution = 150;
+          tempCanvas.width = resolution;
+          tempCanvas.height = resolution;
+          tempCtx.font = '900 ' + (resolution * 0.7) + 'px "' + settings.font + '"';
+          tempCtx.fillStyle = '#000000';
+          tempCtx.textAlign = 'center';
+          tempCtx.textBaseline = 'middle';
+          tempCtx.fillText(char, resolution/2, resolution/2);
+          const imageData = tempCtx.getImageData(0, 0, resolution, resolution);
+          const sampleSize = 3;
+          for (let y = 0; y < resolution; y += sampleSize) {
+            for (let x = 0; x < resolution; x += sampleSize) {
+              const index = (y * resolution + x) * 4;
+              const alpha = imageData.data[index + 3];
+              if (alpha > 50) {
+                const relativeX = (x - resolution/2) / resolution * fontSize;
+                const relativeY = (y - resolution/2) / resolution * fontSize;
+                const worldX = charBaseX + relativeX;
+                const worldY = charBaseY + relativeY;
+                const distortion = getDistortion(worldX - width/2, worldY - height/2, animTime + charIndex * 1.5 + (x + y) * 0.01, settings.distortionStrength, settings.distortionType);
+                const finalX = worldX + distortion.x * 1.2;
+                const finalY = worldY + distortion.y * 1.2;
+                const pixelSize = Math.max(2, fontSize / 120);
+                ctx.fillRect(finalX - pixelSize/2, finalY - pixelSize/2, pixelSize, pixelSize);
+              }
+            }
+          }
+        });
+      } else {
+        ctx.font = '900 ' + fontSize + 'px "' + settings.font + '", Impact, Arial Black, sans-serif';
+        ctx.fillStyle = '#000000';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(settings.text, centerX, centerY);
+      }
+      ctx.restore();
+    }
+  };
+
+  useEffect(() => {
+    const animateLoop = (time) => {
+      render(time);
+      animationRef.current = requestAnimationFrame(animateLoop);
+    };
+    
+    animationRef.current = requestAnimationFrame(animateLoop);
+    
+    return () => {
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    };
+  }, [isAnimating, settings, activeSettings, targetSettings]);
+
+  useEffect(() => {
+    render();
+  }, [settings, customFonts]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        render();
+      }
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return (
+    <div className="w-full h-screen bg-gray-100 flex">
+      <div className="w-80 bg-white shadow-lg p-4 overflow-y-auto">
+        <div className="mb-4">
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => setIsAnimating(!isAnimating)} className="flex items-center gap-1 px-3 py-2 bg-blue-500 text-white rounded text-sm">
+              {isAnimating ? <Pause size={14} /> : <Play size={14} />}
+              {isAnimating ? 'Pause' : 'Play'}
+            </button>
+            <button onClick={() => setSettings(prev => ({ ...prev, lineThickness: Math.floor(Math.random() * 15) + 5, spacing: Math.floor(Math.random() * 30) + 15, distortionStrength: Math.floor(Math.random() * 40) + 10, distortionType: distortionTypes[Math.floor(Math.random() * distortionTypes.length)].value, patternType: ['vertical-lines', 'horizontal-lines', 'checkerboard'][Math.floor(Math.random() * 3)]}))} className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
+              <RotateCcw size={14} />
+              Random
+            </button>
+            <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'pattern.png'; link.href = canvas.toDataURL(); link.click(); }} className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
+              <Download size={14} />
+              Save
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <h3 className="font-semibold mb-2">🎛️ Pulsar 23 Audio Input</h3>
+            
+            <div className="text-xs bg-yellow-50 border border-yellow-200 p-2 rounded mb-2">
+              ⚠️ <strong>Browser Check:</strong> This works best in Chrome/Firefox. Make sure to <strong>ALLOW microphone access</strong> when prompted!
+            </div>
+            
+            <button 
+              onClick={async () => {
+                try {
+                  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                  alert('✅ Audio permission granted! Your devices: ' + stream.getAudioTracks().map(t => t.label).join(', '));
+                  stream.getTracks().forEach(track => track.stop());
+                  await getAudioDevices();
+                } catch (err) {
+                  alert('❌ Audio permission failed: ' + err.message);
+                }
+              }}
+              className="w-full mb-2 px-3 py-2 bg-orange-500 text-white rounded text-sm font-medium hover:bg-orange-600"
+            >
+              🎤 Test Audio Permission
+            </button>
+            
+            <label className="flex items-center mb-2">
+              <input 
+                type="checkbox" 
+                checked={audioEnabled} 
+                onChange={(e) => setAudioEnabled(e.target.checked)} 
+                className="mr-2" 
+              />
+              Enable Audio Reactivity
+            </label>
+            
+            {audioEnabled && (
+              <div className="space-y-3">
+                {audioDevices.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Audio Input Device:</label>
+                    <select 
+                      value={selectedAudioDevice || ''} 
+                      onChange={(e) => setSelectedAudioDevice(e.target.value)}
+                      className="w-full p-2 border rounded text-xs"
+                    >
+                      {audioDevices.map(device => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Audio Input ${device.deviceId.substring(0, 8)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs mb-1">Input Gain Boost: {settings.audioSensitivity.toFixed(1)}x</label>
+                  <input 
+                    type="range" 
+                    min="0.1" 
+                    max="10" 
+                    step="0.1"
+                    value={settings.audioSensitivity} 
+                    onChange={(e) => setSettings(prev => ({ ...prev, audioSensitivity: parseFloat(e.target.value) }))} 
+                    className="w-full" 
+                  />
+                  <div className="text-xs text-gray-500">Try 5-10x for line-level input</div>
+                </div>
+                
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-3 rounded space-y-2">
+                  <div>
+                    <div className="text-xs font-medium mb-1">Overall: {(audioLevel * 100).toFixed(0)}%</div>
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div 
+                        className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full transition-all duration-75" 
+                        style={{ width: (audioLevel * 100) + '%' }}
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <div className="font-medium mb-1">Bass</div>
+                      <div className="w-full bg-gray-200 rounded-full h-1.5">
+                        <div 
+                          className="bg-red-500 h-1.5 rounded-full transition-all duration-75" 
+                          style={{ width: (bassLevel * 100) + '%' }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-medium mb-1">Mid</div>
+                      <div className="w-full bg-gray-200 rounded-full h-1.5">
+                        <div 
+                          className="bg-green-500 h-1.5 rounded-full transition-all duration-75" 
+                          style={{ width: (midLevel * 100) + '%' }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-medium mb-1">High</div>
+                      <div className="w-full bg-gray-200 rounded-full h-1.5">
+                        <div 
+                          className="bg-blue-500 h-1.5 rounded-full transition-all duration-75" 
+                          style={{ width: (highLevel * 100) + '%' }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="space-y-2 bg-gray-50 p-2 rounded">
+                  <div className="text-xs font-semibold text-gray-700">Reactive Parameters:</div>
+                  
+                  <label className="flex items-center">
+                    <input 
+                      type="checkbox" 
+                      checked={settings.audioReactiveSpacing} 
+                      onChange={(e) => setSettings(prev => ({ ...prev, audioReactiveSpacing: e.target.checked }))} 
+                      className="mr-2" 
+                    />
+                    <span className="text-sm">Spacing (Bass) 🔴</span>
+                  </label>
+                  
+                  <label className="flex items-center">
+                    <input 
+                      type="checkbox" 
+                      checked={settings.audioReactiveThickness} 
+                      onChange={(e) => setSettings(prev => ({ ...prev, audioReactiveThickness: e.target.checked }))} 
+                      className="mr-2" 
+                    />
+                    <span className="text-sm">Thickness (Mid) 🟢</span>
+                  </label>
+                  
+                  <label className="flex items-center">
+                    <input 
+                      type="checkbox" 
+                      checked={settings.audioReactiveDistortion} 
+                      onChange={(e) => setSettings(prev => ({ ...prev, audioReactiveDistortion: e.target.checked }))} 
+                      className="mr-2" 
+                    />
+                    <span className="text-sm">Distortion (Overall) 🟣</span>
+                  </label>
+                  
+                  <label className="flex items-center">
+                    <input 
+                      type="checkbox" 
+                      checked={settings.audioReactivePattern} 
+                      onChange={(e) => setSettings(prev => ({ ...prev, audioReactivePattern: e.target.checked }))} 
+                      className="mr-2" 
+                    />
+                    <span className="text-sm">Pattern Switch (High) 🔵</span>
+                  </label>
+                </div>
+
+                <div className="text-xs text-gray-600 bg-blue-50 p-2 rounded">
+                  💡 Connect your Pulsar 23 output to your audio interface input, then select it above.
+                </div>
+                
+                <div className="text-xs bg-gray-100 p-2 rounded font-mono">
+                  <div>Devices: {audioDevices.length}</div>
+                  <div>Selected: {audioDevices.find(d => d.deviceId === selectedAudioDevice)?.label || 'None'}</div>
+                  <div>Context: {audioContextRef.current ? audioContextRef.current.state : 'None'}</div>
+                  <div>Analyser: {analyserRef.current ? 'Ready' : 'None'}</div>
+                  <div>Frame: {animationFrameRef.current ? 'Running' : 'Stopped'}</div>
+                  <div>Raw Audio: {audioLevel.toFixed(3)}</div>
+                  <div>Bass: {bassLevel.toFixed(3)} | Mid: {midLevel.toFixed(3)} | High: {highLevel.toFixed(3)}</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h3 className="font-semibold mb-2 flex items-center gap-1">
+              <Type size={16} />
+              Shapes
+            </h3>
+            <label className="flex items-center mb-2">
+              <input type="checkbox" checked={settings.shapeEnabled} onChange={(e) => setSettings(prev => ({ ...prev, shapeEnabled: e.target.checked }))} className="mr-2" />
+              Enable Shape
+            </label>
+            {settings.shapeEnabled && (
+              <>
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-2">{shapes[settings.shapeIndex].name}</label>
+                  <input type="range" min="0" max={shapes.length - 1} value={settings.shapeIndex} onChange={(e) => setSettings(prev => ({ ...prev, shapeIndex: parseInt(e.target.value) }))} className="w-full" />
+                  <div className="text-xs text-gray-500 text-center mt-1">Shape {settings.shapeIndex + 1} of {shapes.length}</div>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Size: {settings.shapeSize}%</label>
+                  <input type="range" min="30" max="200" value={settings.shapeSize} onChange={(e) => setSettings(prev => ({ ...prev, shapeSize: parseInt(e.target.value) }))} className="w-full" />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div>
+            <h3 className="font-semibold mb-2">Pattern</h3>
+            <select value={settings.patternType} onChange={(e) => setSettings(prev => ({ ...prev, patternType: e.target.value }))} className="w-full p-2 border rounded">
+              <option value="vertical-lines">Vertical Lines</option>
+              <option value="horizontal-lines">Horizontal Lines</option>
+              <option value="checkerboard">Checkerboard</option>
+            </select>
+            <div className="mt-2">
+              <label className="block text-sm mb-1">Thickness: {settings.lineThickness}</label>
+              <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(prev => ({ ...prev, lineThickness: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="mt-2">
+              <label className="block text-sm mb-1">Spacing: {settings.spacing}</label>
+              <input type="range" min="10" max="60" value={settings.spacing} onChange={(e) => setSettings(prev => ({ ...prev, spacing: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-semibold mb-2 flex items-center gap-1">
+              <Type size={16} />
+              Text
+            </h3>
+            <label className="flex items-center mb-2">
+              <input type="checkbox" checked={settings.textEnabled} onChange={(e) => setSettings(prev => ({ ...prev, textEnabled: e.target.checked }))} className="mr-2" />
+              Enable Text
+            </label>
+            {settings.textEnabled && (
+              <>
+                <input type="text" value={settings.text} onChange={(e) => setSettings(prev => ({ ...prev, text: e.target.value }))} className="w-full p-2 border rounded mb-2" placeholder="Type text..." />
+                <div>
+                  <label className="block text-sm mb-1">Font</label>
+                  <select value={settings.font} onChange={(e) => setSettings(prev => ({ ...prev, font: e.target.value }))} className="w-full p-2 border rounded mb-2">
+                    <optgroup label="System Fonts">
+                      {systemFonts.map(font => (
+                        <option key={font} value={font}>{font}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Web Fonts">
+                      {webFonts.map(font => (
+                        <option key={font} value={font}>{font}</option>
+                      ))}
+                    </optgroup>
+                    {customFonts.length > 0 && (
+                      <optgroup label="Custom Fonts">
+                        {customFonts.map(font => (
+                          <option key={font} value={font}>{font}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Upload Custom Font</label>
+                  <input
+                    type="file"
+                    accept=".ttf,.otf,.woff,.woff2"
+                    onChange={handleFontUpload}
+                    className="w-full p-2 border rounded mb-2 text-sm"
+                  />
+                  <div className="text-xs text-gray-500">
+                    Supports .ttf, .otf, .woff, .woff2 files
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Size: {settings.fontSize}%</label>
+                  <input type="range" min="50" max="200" value={settings.fontSize} onChange={(e) => setSettings(prev => ({ ...prev, fontSize: parseInt(e.target.value) }))} className="w-full" />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div>
+            <h3 className="font-semibold mb-2">Distortion</h3>
+            <label className="flex items-center mb-2">
+              <input type="checkbox" checked={settings.distortionEnabled} onChange={(e) => setSettings(prev => ({ ...prev, distortionEnabled: e.target.checked }))} className="mr-2" />
+              Enable Effects
+            </label>
+            {settings.distortionEnabled && (
+              <>
+                <select value={settings.distortionType} onChange={(e) => setSettings(prev => ({ ...prev, distortionType: e.target.value }))} className="w-full p-2 border rounded mb-2">
+                  {distortionTypes.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
+                </select>
+                <div>
+                  <label className="block text-sm mb-1">Strength: {settings.distortionStrength}</label>
+                  <input type="range" min="5" max="80" value={settings.distortionStrength} onChange={(e) => setSettings(prev => ({ ...prev, distortionStrength: parseInt(e.target.value) }))} className="w-full" />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Speed: {settings.distortionSpeed}</label>
+                  <input type="range" min="0.1" max="3" step="0.1" value={settings.distortionSpeed} onChange={(e) => setSettings(prev => ({ ...prev, distortionSpeed: parseFloat(e.target.value) }))} className="w-full" />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div>
+            <h3 className="font-semibold mb-2">Lo-Fi Effects</h3>
+            <label className="flex items-center mb-2">
+              <input type="checkbox" checked={settings.pixelationEnabled} onChange={(e) => setSettings(prev => ({ ...prev, pixelationEnabled: e.target.checked }))} className="mr-2" />
+              Pixelation
+            </label>
+            {settings.pixelationEnabled && (
+              <div>
+                <label className="block text-sm mb-1">Pixel Size: {settings.pixelSize}</label>
+                <input type="range" min="2" max="20" value={settings.pixelSize} onChange={(e) => setSettings(prev => ({ ...prev, pixelSize: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h3 className="font-semibold mb-2 flex items-center gap-1">
+              <Grid size={16} />
+              Grid
+            </h3>
+            <label className="flex items-center mb-2">
+              <input type="checkbox" checked={settings.showGrid} onChange={(e) => setSettings(prev => ({ ...prev, showGrid: e.target.checked }))} className="mr-2" />
+              Show Grid
+            </label>
+            <div>
+              <label className="block text-sm mb-1">Grid Size: {settings.gridSize}x{settings.gridSize}</label>
+              <input type="range" min="10" max="50" value={settings.gridSize} onChange={(e) => setSettings(prev => ({ ...prev, gridSize: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 p-4">
+        <canvas ref={canvasRef} className="w-full h-full border border-gray-300 bg-white rounded-lg shadow-lg" style={{ width: '100%', height: '100%' }} />
+      </div>
+    </div>
+  );
+};
+
+export default PixelMoireGenerator;
