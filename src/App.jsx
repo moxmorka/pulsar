@@ -94,13 +94,13 @@ const AudioPatternGenerator = () => {
     ctx.translate(-w / 2, -h / 2);
 
     if (settings.patternType === 'grid') {
-      // Grid duplicator - each element pulses completely independently
+      // Grid duplicator - each element reacts to audio independently based on position
       for (let i = 0; i < repetition; i++) {
         for (let j = 0; j < repetition; j++) {
           const index = i * repetition + j;
           const normalizedIndex = index / (repetition * repetition);
           
-          // Base position in grid - FIXED, doesn't move
+          // Base position in grid - COMPLETELY FIXED
           const x = (i - repetition/2) * spacing + w/2;
           const y = (j - repetition/2) * spacing + h/2;
           
@@ -110,18 +110,17 @@ const AudioPatternGenerator = () => {
           const indexOffsetX = (settings.offsetXPerIndex || 0) * normalizedIndex;
           const indexOffsetY = (settings.offsetYPerIndex || 0) * normalizedIndex;
           
-          // Each element's unique phase based on position
-          const phaseOffset = i * 0.8 + j * 0.6;
+          // Each element reacts to audio independently
+          // Position determines which frequency band affects it
+          const positionPhase = (i / repetition + j / repetition) * Math.PI * 2;
+          const freqModulation = Math.sin(positionPhase);
           
-          // Independent pulse - only uses phase, not global audio
-          const elementPulse = Math.sin(timeOffset * 4 + phaseOffset);
+          // This element's response to current audio
+          const audioResponse = settings.audioReactiveScale 
+            ? audio.level * (0.5 + freqModulation * 0.5) // Each element responds differently based on position
+            : 0;
           
-          // Audio modulates the pulse wave intensity
-          const audioScale = settings.audioReactiveScale 
-            ? 1 + elementPulse * audio.level * 0.5
-            : 1;
-          
-          const finalScale = indexScale * audioScale;
+          const finalScale = indexScale * (1 + audioResponse);
           const finalX = x + indexOffsetX;
           const finalY = y + indexOffsetY;
           
