@@ -8,6 +8,7 @@ const MoireAudioReactive = () => {
   const [drawingEnabled, setDrawingEnabled] = useState(false);
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const drawnLinesRef = useRef([]);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const audioDataRef = useRef(null);
@@ -263,30 +264,114 @@ const MoireAudioReactive = () => {
     const centerX = width / 2;
     const centerY = height / 2;
     
-    if (!audioEnabled) {
-      ctx.fillStyle = '#000000';
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
-      ctx.fill();
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+    ctx.fill();
+    
+    if (!audioEnabled || !drawingEnabled) {
       return;
     }
     
     const audioLevelsData = audioLevels;
-    const overallAudioLevel = (audioLevelsData.bass + audioLevelsData.mid + audioLevelsData.high) / 3;
+    const bass = audioLevelsData.bass;
+    const mid = audioLevelsData.mid;
+    const high = audioLevelsData.high;
+    const overallAudioLevel = (bass + mid + high) / 3;
     
-    if (!drawingEnabled || overallAudioLevel < 0.15) {
-      ctx.fillStyle = '#000000';
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
-      ctx.fill();
+    if (overallAudioLevel < 0.15) {
       return;
     }
     
-    const lineCount = Math.floor(settings.minLines + (overallAudioLevel * settings.audioSensitivity * (settings.maxLines - settings.minLines)));
-    const actualLineCount = Math.max(1, Math.min(settings.maxLines, lineCount));
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = settings.lineWeight;
     
-    const patternIndex = overallAudioLevel > 0.5 ? 1 : 0;
-    drawMoirePattern(ctx, width, height, 0, patternIndex, 0, audioLevelsData, actualLineCount);
+    const lineCount = Math.floor(5 + (overallAudioLevel * settings.audioSensitivity * 25));
+    
+    if (bass > 0.3) {
+      for (let i = 0; i < lineCount; i++) {
+        const angle = (i / lineCount) * Math.PI * 2;
+        const radius = 50 + (bass * 300);
+        const segments = Math.floor(3 + mid * 20);
+        
+        ctx.beginPath();
+        for (let s = 0; s <= segments; s++) {
+          const t = s / segments;
+          const r = radius * (1 + Math.sin(t * Math.PI * 4 + high * 10) * mid * 0.5);
+          const x = centerX + Math.cos(angle + t * bass * 2) * r;
+          const y = centerY + Math.sin(angle + t * bass * 2) * r;
+          if (s === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    }
+    
+    if (mid > 0.3) {
+      const gridSize = Math.floor(3 + mid * 12);
+      const cellSize = Math.min(width, height) / gridSize;
+      const distortion = high * 50;
+      
+      for (let y = 0; y < gridSize; y++) {
+        ctx.beginPath();
+        for (let x = 0; x < gridSize; x++) {
+          const px = x * cellSize + Math.sin(y * 0.5 + bass * 5) * distortion;
+          const py = y * cellSize + Math.cos(x * 0.5 + bass * 5) * distortion;
+          if (x === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+      
+      for (let x = 0; x < gridSize; x++) {
+        ctx.beginPath();
+        for (let y = 0; y < gridSize; y++) {
+          const px = x * cellSize + Math.sin(y * 0.5 + bass * 5) * distortion;
+          const py = y * cellSize + Math.cos(x * 0.5 + bass * 5) * distortion;
+          if (y === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    }
+    
+    if (high > 0.4) {
+      const spirals = Math.floor(2 + high * 8);
+      for (let sp = 0; sp < spirals; sp++) {
+        const offset = (sp / spirals) * Math.PI * 2;
+        ctx.beginPath();
+        for (let i = 0; i < 100; i++) {
+          const t = i / 100;
+          const angle = t * Math.PI * 4 + offset;
+          const radius = t * (bass * 200 + mid * 150) * (1 + Math.sin(t * 20) * high * 0.3);
+          const x = centerX + Math.cos(angle) * radius;
+          const y = centerY + Math.sin(angle) * radius;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    }
+    
+    if (bass > 0.2 && mid > 0.2) {
+      const rings = Math.floor(3 + bass * 10);
+      for (let r = 0; r < rings; r++) {
+        const radius = (r + 1) * (30 + mid * 80);
+        const segments = Math.floor(20 + high * 40);
+        
+        ctx.beginPath();
+        for (let i = 0; i <= segments; i++) {
+          const angle = (i / segments) * Math.PI * 2;
+          const wobble = Math.sin(i * 0.5 + bass * 10) * high * 30;
+          const x = centerX + Math.cos(angle) * (radius + wobble);
+          const y = centerY + Math.sin(angle) * (radius + wobble);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
     
     if (settings.pixelationEnabled && settings.pixelSize > 1) {
       const imageData = ctx.getImageData(0, 0, width, height);
