@@ -5,6 +5,7 @@ const MoireAudioReactive = () => {
   const canvasRef = useRef(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const [drawingEnabled, setDrawingEnabled] = useState(false);
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const audioContextRef = useRef(null);
@@ -273,7 +274,7 @@ const MoireAudioReactive = () => {
     const audioLevelsData = audioLevels;
     const overallAudioLevel = (audioLevelsData.bass + audioLevelsData.mid + audioLevelsData.high) / 3;
     
-    if (overallAudioLevel < 0.05) {
+    if (!drawingEnabled || overallAudioLevel < 0.15) {
       ctx.fillStyle = '#000000';
       ctx.beginPath();
       ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
@@ -376,6 +377,14 @@ const MoireAudioReactive = () => {
             </div>
             {audioEnabled && (
               <div className="space-y-3">
+                <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-xl p-3">
+                  <span className="text-sm font-medium text-gray-900">Start Drawing</span>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" checked={drawingEnabled} onChange={(e) => setDrawingEnabled(e.target.checked)} className="sr-only peer" />
+                    <div className="w-11 h-6 bg-gray-300 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                  </label>
+                </div>
+                
                 {audioDevices.length > 0 && (
                   <div className="bg-white rounded-xl p-3">
                     <div className="text-xs text-gray-600 mb-2">Audio Input Device</div>
@@ -394,9 +403,36 @@ const MoireAudioReactive = () => {
                 )}
                 
                 <div className="bg-white rounded-xl p-3 space-y-2">
-                  <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>Bass</span><span>{(audioLevels.bass * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.bass * 100) + '%' }} /></div></div>
-                  <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>Mid</span><span>{(audioLevels.mid * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.mid * 100) + '%' }} /></div></div>
-                  <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>High</span><span>{(audioLevels.high * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.high * 100) + '%' }} /></div></div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs text-gray-600">
+                      <span>Bass</span>
+                      <span>{(audioLevels.bass * 100).toFixed(0)}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                      <div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.bass * 100) + '%' }} />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs text-gray-600">
+                      <span>Mid</span>
+                      <span>{(audioLevels.mid * 100).toFixed(0)}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                      <div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.mid * 100) + '%' }} />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs text-gray-600">
+                      <span>High</span>
+                      <span>{(audioLevels.high * 100).toFixed(0)}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                      <div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.high * 100) + '%' }} />
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-2 p-2 bg-gray-50 rounded">
+                    Threshold: 15% - Lines appear when audio exceeds this level
+                  </div>
                 </div>
                 <div className="bg-white rounded-xl p-3">
                   <div className="flex justify-between text-xs text-gray-600 mb-2"><span>Sensitivity</span><span>{settings.audioSensitivity.toFixed(1)}x</span></div>
