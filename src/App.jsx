@@ -1,46 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, Download } from 'lucide-react';
+import { Play, Pause, Download } from 'lucide-react';
 
-const AudioReactiveMoire = () => {
+const MoireAudioReactive = () => {
   const canvasRef = useRef(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioDevices, setAudioDevices] = useState([]);
-  const [selectedDevice, setSelectedDevice] = useState(null);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const audioDataRef = useRef(null);
   const animationRef = useRef(null);
   
-  const [audioLevels, setAudioLevels] = useState({ bass: 0, mid: 0, high: 0, overall: 0 });
+  const [audioLevels, setAudioLevels] = useState({ bass: 0, mid: 0, high: 0 });
+  const [preset, setPreset] = useState('flow');
   
-  const [settings, setSettings] = useState({
-    patternType: 'vertical',
-    lineThickness: 2,
-    spacing: 20,
-    distortionEnabled: true,
-    distortionStrength: 15,
-    wiggleBass: true,
-    wiggleMid: true,
-    wiggleHigh: true,
-    wiggleAmount: 20,
-    wiggleFrequency: 3,
-    audioSensitivity: 2.5
-  });
+  const presets = {
+    flow: { name: 'Flow', density: 15, complexity: 1 },
+    waves: { name: 'Waves', density: 20, complexity: 1 },
+    chaos: { name: 'Chaos', density: 30, complexity: 1 },
+    grid: { name: 'Grid', density: 12, complexity: 1 }
+  };
 
-  useEffect(() => {
-    const getDevices = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const inputs = devices.filter(d => d.kind === 'audioinput');
-        setAudioDevices(inputs);
-        if (inputs.length > 0) setSelectedDevice(inputs[0].deviceId);
-      } catch (err) {
-        console.error('Device enumeration failed:', err);
-      }
-    };
-    getDevices();
-  }, []);
+  const [settings, setSettings] = useState({
+    audioSensitivity: 3.5,
+    morphSpeed: 0.4,
+    lineWeight: 1.5,
+    patternDensity: 15,
+    shearAmount: 0.5,
+    scaleVariation: 1.2,
+    pixelationEnabled: false,
+    pixelSize: 4,
+    minLines: 1,
+    maxLines: 30
+  });
 
   useEffect(() => {
     if (!audioEnabled) {
@@ -54,12 +45,7 @@ const AudioReactiveMoire = () => {
         if (audioContextRef.current) await audioContextRef.current.close();
         
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: selectedDevice ? { exact: selectedDevice } : undefined,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false
-          }
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         });
         
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -67,11 +53,11 @@ const AudioReactiveMoire = () => {
         
         const source = audioContext.createMediaStreamSource(stream);
         const gain = audioContext.createGain();
-        gain.gain.value = 3.0;
+        gain.gain.value = 4.0;
         
         const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 4096;
-        analyser.smoothingTimeConstant = 0.2;
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.25;
         analyserRef.current = analyser;
         
         source.connect(gain);
@@ -85,74 +71,25 @@ const AudioReactiveMoire = () => {
           analyserRef.current.getByteFrequencyData(dataArray);
           audioDataRef.current = dataArray;
           
-          const bass = dataArray.slice(0, Math.floor(bufferLength * 0.1));
-          const mid = dataArray.slice(Math.floor(bufferLength * 0.1), Math.floor(bufferLength * 0.4));
-          const high = dataArray.slice(Math.floor(bufferLength * 0.4), bufferLength);
+          const bass = dataArray.slice(0, Math.floor(bufferLength * 0.15));
+          const mid = dataArray.slice(Math.floor(bufferLength * 0.15), Math.floor(bufferLength * 0.5));
+          const high = dataArray.slice(Math.floor(bufferLength * 0.5), bufferLength);
           
           const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length / 255;
           
-          setAudioLevels({
-            bass: avg(bass),
-            mid: avg(mid),
-            high: avg(high),
-            overall: avg(dataArray)
-          });
-          
+          setAudioLevels({ bass: avg(bass), mid: avg(mid), high: avg(high) });
           requestAnimationFrame(updateAudio);
         };
         
         updateAudio();
       } catch (err) {
         console.error('Audio init failed:', err);
-        alert('Microphone access denied or unavailable');
       }
     };
     
     initAudio();
-    
-    return () => {
-      if (audioContextRef.current) audioContextRef.current.close();
-    };
-  }, [audioEnabled, selectedDevice]);
-
-  const getAudioWiggle = (position, lineIndex) => {
-    if (!audioEnabled || !audioDataRef.current) return { x: 0, y: 0 };
-    
-    const data = audioDataRef.current;
-    const len = data.length;
-    const sensitivity = settings.audioSensitivity;
-    const freq = settings.wiggleFrequency * 0.01;
-    const amount = settings.wiggleAmount;
-    
-    let wiggleX = 0;
-    let wiggleY = 0;
-    
-    if (settings.wiggleBass) {
-      const bassData = data.slice(0, Math.floor(len * 0.1));
-      const idx = Math.floor((position * freq + lineIndex * 0.5) * bassData.length) % bassData.length;
-      const val = (bassData[idx] / 255) * sensitivity;
-      wiggleX += Math.sin(position * freq * 2 + lineIndex) * val * amount;
-      wiggleY += Math.cos(position * freq * 2 + lineIndex) * val * amount;
-    }
-    
-    if (settings.wiggleMid) {
-      const midData = data.slice(Math.floor(len * 0.1), Math.floor(len * 0.4));
-      const idx = Math.floor((position * freq * 2 + lineIndex * 0.3) * midData.length) % midData.length;
-      const val = (midData[idx] / 255) * sensitivity;
-      wiggleX += Math.sin(position * freq * 4 + lineIndex * 1.5) * val * amount * 0.7;
-      wiggleY += Math.cos(position * freq * 4 + lineIndex * 1.5) * val * amount * 0.7;
-    }
-    
-    if (settings.wiggleHigh) {
-      const highData = data.slice(Math.floor(len * 0.4), len);
-      const idx = Math.floor((position * freq * 4 + lineIndex * 0.2) * highData.length) % highData.length;
-      const val = (highData[idx] / 255) * sensitivity;
-      wiggleX += Math.sin(position * freq * 8 + lineIndex * 2) * val * amount * 0.5;
-      wiggleY += Math.cos(position * freq * 8 + lineIndex * 2) * val * amount * 0.5;
-    }
-    
-    return { x: wiggleX, y: wiggleY };
-  };
+    return () => { if (audioContextRef.current) audioContextRef.current.close(); };
+  }, [audioEnabled]);
 
   const noise = (() => {
     const p = new Array(512).fill(0).map(() => Math.floor(Math.random() * 256));
@@ -171,12 +108,121 @@ const AudioReactiveMoire = () => {
     };
   })();
 
-  const getDistortion = (x, y, time, strength) => {
-    const freq = 0.01;
-    return {
-      x: noise(x * freq + time * 0.1, y * freq) * strength,
-      y: noise(x * freq + 100, y * freq + 100 + time * 0.1) * strength
-    };
+  const drawMoirePattern = (ctx, width, height, t, patternType, layerIndex, audioLevels) => {
+    const bass = audioLevels.bass * settings.audioSensitivity;
+    const mid = audioLevels.mid * settings.audioSensitivity;
+    const high = audioLevels.high * settings.audioSensitivity;
+    
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const shearX = Math.sin(t * 0.7 + layerIndex * 0.8) * settings.shearAmount + mid * 0.3;
+    const shearY = Math.cos(t * 0.5 + layerIndex * 1.2) * settings.shearAmount * 0.7 + bass * 0.2;
+    const scale = 1 + Math.sin(t + layerIndex) * 0.3 * settings.scaleVariation + mid * 0.5;
+    const offset = Math.cos(t * 0.7 + layerIndex * 0.8) * 50 + high * 100;
+    
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    ctx.transform(1, shearY, shearX, 1, 0, 0);
+    ctx.scale(scale, scale);
+    ctx.translate(-centerX, -centerY);
+    
+    const density = settings.patternDensity + Math.floor(mid * 20);
+    const spacing = Math.max(5, 40 - density + bass * 30);
+    
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = settings.lineWeight;
+    
+    if (patternType === 0) {
+      for (let i = -width; i < width * 2; i += spacing) {
+        ctx.beginPath();
+        for (let y = -height; y < height * 2; y += 2) {
+          const x = i + Math.sin(y * 0.02 + t + layerIndex + bass * 3) * (30 + mid * 40);
+          const xNoise = x + noise(x * 0.01, y * 0.01 + t * 0.2) * (20 + high * 30);
+          ctx.lineTo(xNoise + offset, y);
+        }
+        ctx.stroke();
+      }
+    } else if (patternType === 1) {
+      for (let i = -height; i < height * 2; i += spacing) {
+        ctx.beginPath();
+        for (let x = -width; x < width * 2; x += 2) {
+          const y = i + Math.cos(x * 0.02 + t + layerIndex + mid * 3) * (30 + bass * 40);
+          const yNoise = y + noise(x * 0.01 + t * 0.2, y * 0.01) * (20 + high * 30);
+          ctx.lineTo(x, yNoise + offset);
+        }
+        ctx.stroke();
+      }
+    } else if (patternType === 2) {
+      for (let i = -height; i < height * 2; i += spacing) {
+        ctx.beginPath();
+        for (let x = -width; x < width * 2; x += 2) {
+          const y = i + Math.sin(x * 0.03 + t * 1.2 + layerIndex + bass * 4) * (35 + mid * 45);
+          const yNoise = y + noise(x * 0.012 + t * 0.25, y * 0.012) * (25 + high * 35);
+          ctx.lineTo(x, yNoise + offset * 0.8);
+        }
+        ctx.stroke();
+      }
+    } else {
+      for (let i = -width; i < width * 2; i += spacing * 1.5) {
+        ctx.beginPath();
+        for (let y = -height; y < height * 2; y += 2) {
+          const x = i + Math.sin(y * 0.03 + t * 1.5 + layerIndex + bass * 4) * (40 + mid * 50);
+          const xNoise = x + noise(x * 0.015, y * 0.015 + t * 0.3) * (25 + high * 35);
+          ctx.lineTo(xNoise + offset * 1.5, y);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  };
+
+  const drawFigure = (ctx, type, size) => {
+    const cx = size / 2;
+    const cy = size / 2;
+    
+    if (type === 'face') {
+      ctx.arc(cx, cy, size * 0.35, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx - size * 0.12, cy - size * 0.08, size * 0.06, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx + size * 0.12, cy - size * 0.08, size * 0.06, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx, cy + size * 0.1, size * 0.15, 0, Math.PI);
+      ctx.stroke();
+    } else if (type === 'tree') {
+      ctx.moveTo(cx, size * 0.7);
+      ctx.lineTo(cx, size * 0.3);
+      ctx.stroke();
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.arc(cx, size * 0.25 - i * size * 0.08, size * 0.15 - i * size * 0.03, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    } else if (type === 'sun') {
+      ctx.arc(cx, cy, size * 0.15, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let i = 0; i < 12; i++) {
+        const angle = (i * Math.PI * 2) / 12;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * size * 0.2, cy + Math.sin(angle) * size * 0.2);
+        ctx.lineTo(cx + Math.cos(angle) * size * 0.35, cy + Math.sin(angle) * size * 0.35);
+        ctx.stroke();
+      }
+    } else if (type === 'cat') {
+      ctx.arc(cx, cy, size * 0.25, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - size * 0.2, cy - size * 0.25);
+      ctx.lineTo(cx - size * 0.25, cy - size * 0.4);
+      ctx.lineTo(cx - size * 0.15, cy - size * 0.3);
+      ctx.moveTo(cx + size * 0.2, cy - size * 0.25);
+      ctx.lineTo(cx + size * 0.25, cy - size * 0.4);
+      ctx.lineTo(cx + size * 0.15, cy - size * 0.3);
+      ctx.stroke();
+    }
   };
 
   const render = (time = 0) => {
@@ -187,60 +233,50 @@ const AudioReactiveMoire = () => {
     const width = canvas.width;
     const height = canvas.height;
     
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#FAFAFA';
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#000000';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = settings.lineThickness;
     
-    const animTime = isAnimating ? time * 0.001 : 0;
+    if (!audioEnabled) {
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(width / 2, height / 2, 3, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
     
-    if (settings.patternType === 'vertical') {
-      let lineIndex = 0;
-      for (let x = 0; x < width; x += settings.spacing) {
-        ctx.beginPath();
-        for (let y = 0; y < height; y += 2) {
-          let drawX = x;
-          let drawY = y;
-          
-          const wiggle = getAudioWiggle(y, lineIndex);
-          drawX += wiggle.x;
-          
-          if (settings.distortionEnabled) {
-            const dist = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength);
-            drawX += dist.x;
-            drawY += dist.y;
+    const audioLevelsData = audioLevels;
+    
+    const overallAudioLevel = (audioLevelsData.bass + audioLevelsData.mid + audioLevelsData.high) / 3;
+    const lineCount = Math.floor(settings.minLines + (overallAudioLevel * settings.audioSensitivity * (settings.maxLines - settings.minLines)));
+    const actualLineCount = Math.max(1, Math.min(settings.maxLines, lineCount));
+    
+    const patternIndex = overallAudioLevel > 0.5 ? 1 : 0;
+    drawMoirePattern(ctx, width, height, 0, patternIndex, 0, audioLevelsData, actualLineCount);
+    
+    if (settings.pixelationEnabled && settings.pixelSize > 1) {
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const pixelatedData = ctx.createImageData(width, height);
+      for (let y = 0; y < height; y += settings.pixelSize) {
+        for (let x = 0; x < width; x += settings.pixelSize) {
+          const sampleX = Math.min(x + Math.floor(settings.pixelSize / 2), width - 1);
+          const sampleY = Math.min(y + Math.floor(settings.pixelSize / 2), height - 1);
+          const sampleIndex = (sampleY * width + sampleX) * 4;
+          const r = imageData.data[sampleIndex];
+          const g = imageData.data[sampleIndex + 1];
+          const b = imageData.data[sampleIndex + 2];
+          const a = imageData.data[sampleIndex + 3];
+          for (let py = y; py < Math.min(y + settings.pixelSize, height); py++) {
+            for (let px = x; px < Math.min(x + settings.pixelSize, width); px++) {
+              const index = (py * width + px) * 4;
+              pixelatedData.data[index] = r;
+              pixelatedData.data[index + 1] = g;
+              pixelatedData.data[index + 2] = b;
+              pixelatedData.data[index + 3] = a;
+            }
           }
-          
-          if (y === 0) ctx.moveTo(drawX, drawY);
-          else ctx.lineTo(drawX, drawY);
         }
-        ctx.stroke();
-        lineIndex++;
       }
-    } else {
-      let lineIndex = 0;
-      for (let y = 0; y < height; y += settings.spacing) {
-        ctx.beginPath();
-        for (let x = 0; x < width; x += 2) {
-          let drawX = x;
-          let drawY = y;
-          
-          const wiggle = getAudioWiggle(x, lineIndex);
-          drawY += wiggle.y;
-          
-          if (settings.distortionEnabled) {
-            const dist = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength);
-            drawX += dist.x;
-            drawY += dist.y;
-          }
-          
-          if (x === 0) ctx.moveTo(drawX, drawY);
-          else ctx.lineTo(drawX, drawY);
-        }
-        ctx.stroke();
-        lineIndex++;
-      }
+      ctx.putImageData(pixelatedData, 0, 0);
     }
   };
 
@@ -250,10 +286,8 @@ const AudioReactiveMoire = () => {
       animationRef.current = requestAnimationFrame(animate);
     };
     animationRef.current = requestAnimationFrame(animate);
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
-  }, [settings, isAnimating, audioEnabled]);
+    return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
+  }, [settings, isAnimating, audioEnabled, preset, audioLevels]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -270,140 +304,81 @@ const AudioReactiveMoire = () => {
   }, []);
 
   return (
-    <div className="w-full h-screen bg-gray-100 flex">
-      <div className="w-80 bg-white shadow-lg p-4 overflow-y-auto space-y-4">
-        <div className="flex gap-2 mb-4">
-          <button onClick={() => setIsAnimating(!isAnimating)} className="flex items-center gap-1 px-3 py-2 bg-blue-500 text-white rounded text-sm">
-            {isAnimating ? <><Pause size={14} /> Pause</> : <><Play size={14} /> Play</>}
-          </button>
-          <button onClick={() => setSettings(prev => ({ ...prev, lineThickness: Math.random() * 8 + 2, spacing: Math.random() * 30 + 15, distortionStrength: Math.random() * 40 + 10 }))} className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
-            <RotateCcw size={14} /> Random
-          </button>
-          <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'audio-moire.png'; link.href = canvas.toDataURL(); link.click(); }} className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
-            <Download size={14} /> Save
-          </button>
-        </div>
-
-        <div>
-          <h3 className="font-bold mb-2">🎛️ Pulsar 23 Audio Input</h3>
-          <label className="flex items-center mb-3">
-            <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} className="mr-2" />
-            Enable Audio Reactivity
-          </label>
-          
-          {audioEnabled && (
-            <div className="space-y-3">
-              {audioDevices.length > 0 && (
-                <div>
-                  <label className="block text-xs mb-1">Input Device:</label>
-                  <select value={selectedDevice || ''} onChange={(e) => setSelectedDevice(e.target.value)} className="w-full p-2 border rounded text-xs">
-                    {audioDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Device ${d.deviceId.substring(0, 8)}`}</option>)}
-                  </select>
-                </div>
-              )}
-              
-              <div>
-                <label className="block text-xs mb-1">Input Gain: {settings.audioSensitivity.toFixed(1)}x</label>
-                <input type="range" min="0.5" max="10" step="0.1" value={settings.audioSensitivity} onChange={(e) => setSettings(prev => ({ ...prev, audioSensitivity: parseFloat(e.target.value) }))} className="w-full" />
-              </div>
-              
-              <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-3 rounded space-y-2">
-                <div className="text-xs">
-                  <div className="font-medium mb-1">Overall: {(audioLevels.overall * 100).toFixed(0)}%</div>
-                  <div className="w-full bg-gray-200 rounded h-2">
-                    <div className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded" style={{ width: (audioLevels.overall * 100) + '%' }} />
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <div className="font-medium mb-1">Bass</div>
-                    <div className="w-full bg-gray-200 rounded h-1.5">
-                      <div className="bg-red-500 h-1.5 rounded" style={{ width: (audioLevels.bass * 100) + '%' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-medium mb-1">Mid</div>
-                    <div className="w-full bg-gray-200 rounded h-1.5">
-                      <div className="bg-green-500 h-1.5 rounded" style={{ width: (audioLevels.mid * 100) + '%' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-medium mb-1">High</div>
-                    <div className="w-full bg-gray-200 rounded h-1.5">
-                      <div className="bg-blue-500 h-1.5 rounded" style={{ width: (audioLevels.high * 100) + '%' }} />
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="space-y-2 bg-gray-50 p-2 rounded">
-                <div className="text-xs font-semibold">Line Wiggle Controls:</div>
-                <label className="flex items-center text-sm">
-                  <input type="checkbox" checked={settings.wiggleBass} onChange={(e) => setSettings(prev => ({ ...prev, wiggleBass: e.target.checked }))} className="mr-2" />
-                  Bass Wiggle 🔴
-                </label>
-                <label className="flex items-center text-sm">
-                  <input type="checkbox" checked={settings.wiggleMid} onChange={(e) => setSettings(prev => ({ ...prev, wiggleMid: e.target.checked }))} className="mr-2" />
-                  Mid Wiggle 🟢
-                </label>
-                <label className="flex items-center text-sm">
-                  <input type="checkbox" checked={settings.wiggleHigh} onChange={(e) => setSettings(prev => ({ ...prev, wiggleHigh: e.target.checked }))} className="mr-2" />
-                  High Wiggle 🔵
-                </label>
-              </div>
-              
-              <div>
-                <label className="block text-xs mb-1">Wiggle Amount: {settings.wiggleAmount}</label>
-                <input type="range" min="5" max="80" value={settings.wiggleAmount} onChange={(e) => setSettings(prev => ({ ...prev, wiggleAmount: parseInt(e.target.value) }))} className="w-full" />
-              </div>
-              
-              <div>
-                <label className="block text-xs mb-1">Wiggle Frequency: {settings.wiggleFrequency}</label>
-                <input type="range" min="1" max="10" value={settings.wiggleFrequency} onChange={(e) => setSettings(prev => ({ ...prev, wiggleFrequency: parseInt(e.target.value) }))} className="w-full" />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3 className="font-bold mb-2">Pattern</h3>
-          <select value={settings.patternType} onChange={(e) => setSettings(prev => ({ ...prev, patternType: e.target.value }))} className="w-full p-2 border rounded mb-2">
-            <option value="vertical">Vertical Lines</option>
-            <option value="horizontal">Horizontal Lines</option>
-          </select>
-          
-          <div>
-            <label className="block text-sm mb-1">Thickness: {settings.lineThickness.toFixed(1)}</label>
-            <input type="range" min="1" max="10" step="0.5" value={settings.lineThickness} onChange={(e) => setSettings(prev => ({ ...prev, lineThickness: parseFloat(e.target.value) }))} className="w-full" />
+    <div className="w-full h-screen bg-white flex flex-col">
+      <div className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <h1 className="text-2xl font-light tracking-tight text-gray-900">Bruno</h1>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsAnimating(!isAnimating)} className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-gray-800">
+              {isAnimating ? <><Pause size={16} /> Pause</> : <><Play size={16} /> Play</>}
+            </button>
+            <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'moire.png'; link.href = canvas.toDataURL(); link.click(); }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-100 text-gray-900 text-sm font-medium hover:bg-gray-200">
+              <Download size={16} /> Export
+            </button>
           </div>
-          
-          <div className="mt-2">
-            <label className="block text-sm mb-1">Spacing: {settings.spacing}</label>
-            <input type="range" min="10" max="60" value={settings.spacing} onChange={(e) => setSettings(prev => ({ ...prev, spacing: parseInt(e.target.value) }))} className="w-full" />
-          </div>
-        </div>
-
-        <div>
-          <h3 className="font-bold mb-2">Distortion</h3>
-          <label className="flex items-center mb-2">
-            <input type="checkbox" checked={settings.distortionEnabled} onChange={(e) => setSettings(prev => ({ ...prev, distortionEnabled: e.target.checked }))} className="mr-2" />
-            Enable Distortion
-          </label>
-          {settings.distortionEnabled && (
-            <div>
-              <label className="block text-sm mb-1">Strength: {settings.distortionStrength}</label>
-              <input type="range" min="5" max="80" value={settings.distortionStrength} onChange={(e) => setSettings(prev => ({ ...prev, distortionStrength: parseInt(e.target.value) }))} className="w-full" />
-            </div>
-          )}
         </div>
       </div>
 
-      <div className="flex-1 p-4">
-        <canvas ref={canvasRef} className="w-full h-full border border-gray-300 bg-white rounded-lg shadow-lg" />
+      <div className="flex-1 flex">
+        <div className="w-80 bg-gray-50 border-r border-gray-200 overflow-y-auto p-6 space-y-6">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Presets</h3>
+            <div className="space-y-2">
+              {Object.entries(presets).map(([key, p]) => (
+                <button key={key} onClick={() => setPreset(key)} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium ${preset === key ? 'bg-black text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-900">Audio</h3>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} className="sr-only peer" />
+                <div className="w-11 h-6 bg-gray-300 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black"></div>
+              </label>
+            </div>
+            {audioEnabled && (
+              <div className="space-y-3">
+                <div className="bg-white rounded-xl p-3 space-y-2">
+                  <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>Bass</span><span>{(audioLevels.bass * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.bass * 100) + '%' }} /></div></div>
+                  <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>Mid</span><span>{(audioLevels.mid * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.mid * 100) + '%' }} /></div></div>
+                  <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>High</span><span>{(audioLevels.high * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.high * 100) + '%' }} /></div></div>
+                </div>
+                <div className="bg-white rounded-xl p-3">
+                  <div className="flex justify-between text-xs text-gray-600 mb-2"><span>Sensitivity</span><span>{settings.audioSensitivity.toFixed(1)}x</span></div>
+                  <input type="range" min="0.5" max="10" step="0.1" value={settings.audioSensitivity} onChange={(e) => setSettings(prev => ({ ...prev, audioSensitivity: parseFloat(e.target.value) }))} className="w-full accent-black" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl p-3 space-y-3">
+            <h3 className="text-sm font-semibold text-gray-900">Controls</h3>
+            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Speed</span><span>{settings.morphSpeed.toFixed(1)}</span></div><input type="range" min="0.1" max="2" step="0.1" value={settings.morphSpeed} onChange={(e) => setSettings(prev => ({ ...prev, morphSpeed: parseFloat(e.target.value) }))} className="w-full accent-black" /></div>
+            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Line Weight</span><span>{settings.lineWeight.toFixed(1)}</span></div><input type="range" min="0.5" max="4" step="0.1" value={settings.lineWeight} onChange={(e) => setSettings(prev => ({ ...prev, lineWeight: parseFloat(e.target.value) }))} className="w-full accent-black" /></div>
+            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Density</span><span>{settings.patternDensity}</span></div><input type="range" min="5" max="40" value={settings.patternDensity} onChange={(e) => setSettings(prev => ({ ...prev, patternDensity: parseInt(e.target.value) }))} className="w-full accent-black" /></div>
+            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Shear</span><span>{settings.shearAmount.toFixed(1)}</span></div><input type="range" min="0" max="2" step="0.1" value={settings.shearAmount} onChange={(e) => setSettings(prev => ({ ...prev, shearAmount: parseFloat(e.target.value) }))} className="w-full accent-black" /></div>
+            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Min Lines</span><span>{settings.minLines}</span></div><input type="range" min="1" max="10" value={settings.minLines} onChange={(e) => setSettings(prev => ({ ...prev, minLines: parseInt(e.target.value) }))} className="w-full accent-black" /></div>
+            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Max Lines</span><span>{settings.maxLines}</span></div><input type="range" min="10" max="100" value={settings.maxLines} onChange={(e) => setSettings(prev => ({ ...prev, maxLines: parseInt(e.target.value) }))} className="w-full accent-black" /></div>
+          </div>
+
+          <div className="bg-white rounded-xl p-3 space-y-3">
+            <div className="flex items-center justify-between"><span className="text-sm font-semibold text-gray-900">Pixelation</span><label className="relative inline-flex items-center cursor-pointer"><input type="checkbox" checked={settings.pixelationEnabled} onChange={(e) => setSettings(prev => ({ ...prev, pixelationEnabled: e.target.checked }))} className="sr-only peer" /><div className="w-11 h-6 bg-gray-300 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black"></div></label></div>
+            {settings.pixelationEnabled && <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Size</span><span>{settings.pixelSize}</span></div><input type="range" min="2" max="20" value={settings.pixelSize} onChange={(e) => setSettings(prev => ({ ...prev, pixelSize: parseInt(e.target.value) }))} className="w-full accent-black" /></div>}
+          </div>
+
+
+        </div>
+
+        <div className="flex-1 flex items-center justify-center p-8">
+          <canvas ref={canvasRef} className="w-full h-full rounded-2xl shadow-sm" />
+        </div>
       </div>
     </div>
   );
 };
 
-export default AudioReactiveMoire;
+export default MoireAudioReactive;
