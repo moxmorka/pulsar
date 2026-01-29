@@ -5,6 +5,8 @@ const MoireAudioReactive = () => {
   const canvasRef = useRef(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState(null);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const audioDataRef = useRef(null);
@@ -21,7 +23,7 @@ const MoireAudioReactive = () => {
   };
 
   const [settings, setSettings] = useState({
-    audioSensitivity: 3.5,
+    audioSensitivity: 1.0,
     morphSpeed: 0.4,
     lineWeight: 1.5,
     patternDensity: 15,
@@ -32,6 +34,22 @@ const MoireAudioReactive = () => {
     minLines: 1,
     maxLines: 30
   });
+
+  useEffect(() => {
+    const getDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        setAudioDevices(audioInputs);
+        if (audioInputs.length > 0 && !selectedDevice) {
+          setSelectedDevice(audioInputs[0].deviceId);
+        }
+      } catch (err) {
+        console.error('Failed to get devices:', err);
+      }
+    };
+    getDevices();
+  }, []);
 
   useEffect(() => {
     if (!audioEnabled) {
@@ -45,7 +63,12 @@ const MoireAudioReactive = () => {
         if (audioContextRef.current) await audioContextRef.current.close();
         
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          audio: { 
+            deviceId: selectedDevice ? { exact: selectedDevice } : undefined,
+            echoCancellation: false, 
+            noiseSuppression: false, 
+            autoGainControl: false 
+          }
         });
         
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -89,7 +112,7 @@ const MoireAudioReactive = () => {
     
     initAudio();
     return () => { if (audioContextRef.current) audioContextRef.current.close(); };
-  }, [audioEnabled]);
+  }, [audioEnabled, selectedDevice]);
 
   const noise = (() => {
     const p = new Array(512).fill(0).map(() => Math.floor(Math.random() * 256));
@@ -342,6 +365,23 @@ const MoireAudioReactive = () => {
             </div>
             {audioEnabled && (
               <div className="space-y-3">
+                {audioDevices.length > 0 && (
+                  <div className="bg-white rounded-xl p-3">
+                    <div className="text-xs text-gray-600 mb-2">Audio Input Device</div>
+                    <select 
+                      value={selectedDevice || ''} 
+                      onChange={(e) => setSelectedDevice(e.target.value)}
+                      className="w-full p-2 border border-gray-300 rounded-lg text-xs"
+                    >
+                      {audioDevices.map(device => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Device ${device.deviceId.substring(0, 8)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
                 <div className="bg-white rounded-xl p-3 space-y-2">
                   <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>Bass</span><span>{(audioLevels.bass * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.bass * 100) + '%' }} /></div></div>
                   <div className="space-y-1"><div className="flex justify-between text-xs text-gray-600"><span>Mid</span><span>{(audioLevels.mid * 100).toFixed(0)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.mid * 100) + '%' }} /></div></div>
