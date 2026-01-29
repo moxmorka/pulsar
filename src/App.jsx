@@ -15,7 +15,8 @@ const AudioPatternMorpher = () => {
     showGrid: false,
     gridSize: 20,
     pixelationEnabled: false,
-    pixelSize: 4
+    pixelSize: 4,
+    patternColor: '#000000'
   });
   
   const canvasRef = useRef(null);
@@ -58,11 +59,29 @@ const AudioPatternMorpher = () => {
       dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
       
       setIsListening(true);
-      animate();
     } catch (err) {
       console.error('Audio error:', err);
     }
   };
+
+  useEffect(() => {
+    if (isListening) {
+      const loop = () => {
+        animate();
+        animationRef.current = requestAnimationFrame(loop);
+      };
+      loop();
+    } else {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    }
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [isListening, selectedShape, morphValue, settings]);
 
   const stopAudio = () => {
     if (audioContextRef.current) {
@@ -93,6 +112,7 @@ const AudioPatternMorpher = () => {
     const spacing = settings.spacing;
     const distortion = settings.distortionStrength;
     const speed = settings.distortionSpeed;
+    const color = settings.patternColor;
     
     if (morph < 0.33) {
       const gridSize = Math.floor(Math.max(w, h) / spacing);
@@ -107,7 +127,8 @@ const AudioPatternMorpher = () => {
             const y = j * spacing + Math.cos(timeOffset + j * 0.1) * offset;
             const size = settings.lineThickness + audio.freq * 4;
             
-            ctx.fillStyle = `rgba(0, 0, 0, ${0.5 / numLayers})`;
+            const alpha = 0.8 / numLayers;
+            ctx.fillStyle = color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
             ctx.beginPath();
             ctx.arc(x, y, size, 0, Math.PI * 2);
             ctx.fill();
@@ -127,7 +148,7 @@ const AudioPatternMorpher = () => {
           const y = j * spacing + Math.sin(i * 0.3 + timeOffset + audio.freq * 10) * distortion * audio.level;
           const size = settings.lineThickness + audio.level * 3;
           
-          ctx.fillStyle = `rgba(0, 0, 0, 0.7)`;
+          ctx.fillStyle = color + 'b3';
           ctx.beginPath();
           ctx.arc(x, y, size, 0, Math.PI * 2);
           ctx.fill();
@@ -148,7 +169,7 @@ const AudioPatternMorpher = () => {
           const y1 = baseY + Math.cos(angle1 + i * 0.1) * distortion * audio.level;
           const size = settings.lineThickness + audio.level * 4;
           
-          ctx.fillStyle = `rgba(0, 0, 0, 0.6)`;
+          ctx.fillStyle = color + '99';
           ctx.beginPath();
           ctx.arc(x1, y1, size, 0, Math.PI * 2);
           ctx.fill();
@@ -166,13 +187,15 @@ const AudioPatternMorpher = () => {
     const distortion = settings.distortionStrength;
     const speed = settings.distortionSpeed;
     const thickness = settings.lineThickness;
+    const color = settings.patternColor;
     
     if (morph < 0.33) {
       const numLines = Math.floor(h / spacing);
       const timeOffset = Date.now() * 0.001 * speed;
       const offset = audio.level * distortion;
       
-      ctx.strokeStyle = `rgba(0, 0, 0, ${0.4 / numLayers})`;
+      const alpha = 0.6 / numLayers;
+      ctx.strokeStyle = color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
       ctx.lineWidth = thickness + audio.freq * 3;
       
       for (let layer = 0; layer < numLayers; layer++) {
@@ -200,7 +223,7 @@ const AudioPatternMorpher = () => {
       const numLines = Math.floor(h / spacing);
       const timeOffset = Date.now() * 0.001 * speed;
       
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.6)`;
+      ctx.strokeStyle = color + '99';
       ctx.lineWidth = thickness + audio.level * 3;
       
       for (let i = 0; i < numLines; i++) {
@@ -224,7 +247,7 @@ const AudioPatternMorpher = () => {
       const angle1 = Math.PI / 4 + audio.freq * 0.5 + timeOffset * 0.5;
       const angle2 = -Math.PI / 4 + audio.level * 0.5 + timeOffset * 0.3;
       
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.4)`;
+      ctx.strokeStyle = color + '66';
       ctx.lineWidth = thickness + audio.freq * 2;
       
       for (let i = 0; i < numLines; i++) {
@@ -566,6 +589,22 @@ const AudioPatternMorpher = () => {
               onChange={(e) => setMorphValue(parseFloat(e.target.value))}
               className="w-full h-1 bg-gray-200 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black"
             />
+          </div>
+
+          <div className="space-y-3 pt-4 border-t border-gray-200">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Appearance</label>
+            
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-gray-600">Pattern Color</span>
+              </div>
+              <input
+                type="color"
+                value={settings.patternColor}
+                onChange={(e) => setSettings(prev => ({...prev, patternColor: e.target.value}))}
+                className="w-full h-10 rounded-lg cursor-pointer"
+              />
+            </div>
           </div>
 
           <div className="space-y-3 pt-4 border-t border-gray-200">
