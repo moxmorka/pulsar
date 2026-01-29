@@ -259,17 +259,28 @@ const MoireAudioReactive = () => {
     ctx.fillStyle = '#FAFAFA';
     ctx.fillRect(0, 0, width, height);
     
+    const centerX = width / 2;
+    const centerY = height / 2;
+    
     if (!audioEnabled) {
       ctx.fillStyle = '#000000';
       ctx.beginPath();
-      ctx.arc(width / 2, height / 2, 3, 0, Math.PI * 2);
+      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
       ctx.fill();
       return;
     }
     
     const audioLevelsData = audioLevels;
-    
     const overallAudioLevel = (audioLevelsData.bass + audioLevelsData.mid + audioLevelsData.high) / 3;
+    
+    if (overallAudioLevel < 0.05) {
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    
     const lineCount = Math.floor(settings.minLines + (overallAudioLevel * settings.audioSensitivity * (settings.maxLines - settings.minLines)));
     const actualLineCount = Math.max(1, Math.min(settings.maxLines, lineCount));
     
