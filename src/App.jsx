@@ -75,318 +75,371 @@ const AudioPatternMorpher = () => {
   };
 
   const drawDotPatterns = (ctx, w, h, morph, audio) => {
-    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, w, h);
     
-    // Pattern 0: Golden spiral
+    // Pattern 0: Moiré dot grid
     if (morph < 0.33) {
-      const t = morph / 0.33;
-      const numDots = 200;
-      const angle = PHI * Math.PI * 2;
+      const gridSize = 40;
+      const spacing = Math.min(w, h) / gridSize;
+      const offset = audio.level * 20;
       
-      for (let i = 0; i < numDots; i++) {
-        const theta = i * angle;
-        const radius = Math.sqrt(i) * 15 * (1 + audio.level * 0.5);
-        const x = w / 2 + radius * Math.cos(theta);
-        const y = h / 2 + radius * Math.sin(theta);
-        const size = (3 + audio.freq * 10) * (1 - t * 0.5);
-        
-        ctx.fillStyle = `hsla(${(i * 5 + audio.level * 360) % 360}, 70%, 60%, ${0.8 - t * 0.3})`;
-        ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    
-    // Pattern 1: Fibonacci grid
-    if (morph >= 0.33 && morph < 0.67) {
-      const t = (morph - 0.33) / 0.34;
-      const gridSize = 12;
-      
+      // Layer 1
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          const fibX = FIBONACCI[i % FIBONACCI.length];
-          const fibY = FIBONACCI[j % FIBONACCI.length];
-          const x = (w / gridSize) * i + fibX * 2;
-          const y = (h / gridSize) * j + fibY * 2;
-          const size = (fibX + fibY) * 0.3 * (1 + audio.level);
-          const pulse = Math.sin(Date.now() * 0.001 * audio.freq * 10 + i + j) * 0.5 + 0.5;
+          const x = i * spacing + offset;
+          const y = j * spacing;
+          const size = 2 + audio.freq * 4;
           
-          ctx.fillStyle = `hsla(${(i * j * 10 + audio.freq * 180) % 360}, 60%, 50%, ${0.7 * pulse})`;
+          ctx.fillStyle = `rgba(0, 0, 0, 0.6)`;
           ctx.beginPath();
-          ctx.arc(x, y, size * (1 + t * 0.5), 0, Math.PI * 2);
+          ctx.arc(x, y, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      
+      // Layer 2 - creates moiré
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const x = i * spacing;
+          const y = j * spacing + offset * 1.5;
+          const size = 2 + audio.level * 4;
+          
+          ctx.fillStyle = `rgba(0, 0, 0, 0.6)`;
+          ctx.beginPath();
+          ctx.arc(x, y, size, 0, Math.PI * 2);
           ctx.fill();
         }
       }
     }
     
-    // Pattern 2: Voronoi-inspired cellular
-    if (morph >= 0.67) {
-      const t = (morph - 0.67) / 0.33;
-      const numCells = 50;
-      const points = [];
+    // Pattern 1: Interference dot waves
+    if (morph >= 0.33 && morph < 0.67) {
+      const rows = 30;
+      const cols = 50;
+      const spacingX = w / cols;
+      const spacingY = h / rows;
       
-      for (let i = 0; i < numCells; i++) {
-        const angle = (i / numCells) * Math.PI * 2 * PHI;
-        const radius = (i / numCells) * Math.min(w, h) * 0.4;
-        points.push({
-          x: w / 2 + radius * Math.cos(angle) * (1 + audio.level * 0.3),
-          y: h / 2 + radius * Math.sin(angle) * (1 + audio.level * 0.3)
-        });
+      for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+          const x = i * spacingX;
+          const y = j * spacingY + Math.sin(i * 0.3 + audio.freq * 10) * 15 * audio.level;
+          const size = 2 + audio.level * 3;
+          
+          ctx.fillStyle = `rgba(0, 0, 0, 0.7)`;
+          ctx.beginPath();
+          ctx.arc(x, y, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
+    }
+    
+    // Pattern 2: Diagonal dot interference
+    if (morph >= 0.67) {
+      const gridSize = 35;
+      const spacing = Math.min(w, h) / gridSize;
+      const angle1 = audio.freq * Math.PI * 0.3;
+      const angle2 = angle1 + Math.PI / 3;
       
-      for (let x = 0; x < w; x += 8) {
-        for (let y = 0; y < h; y += 8) {
-          let minDist = Infinity;
-          let closestIdx = 0;
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const baseX = i * spacing;
+          const baseY = j * spacing;
           
-          points.forEach((p, idx) => {
-            const dist = Math.hypot(x - p.x, y - p.y);
-            if (dist < minDist) {
-              minDist = dist;
-              closestIdx = idx;
-            }
-          });
+          // First layer at angle
+          const x1 = baseX + Math.sin(angle1) * j * spacing * 0.1;
+          const y1 = baseY + Math.cos(angle1) * j * spacing * 0.1;
+          const size = 2 + audio.level * 4;
           
-          const hue = (closestIdx * 30 + audio.freq * 180) % 360;
-          const brightness = 30 + minDist * 0.1;
-          ctx.fillStyle = `hsla(${hue}, 70%, ${brightness}%, ${0.6 + t * 0.2})`;
-          ctx.fillRect(x, y, 8, 8);
+          ctx.fillStyle = `rgba(0, 0, 0, 0.6)`;
+          ctx.beginPath();
+          ctx.arc(x1, y1, size, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
     }
   };
 
   const drawLinePatterns = (ctx, w, h, morph, audio) => {
-    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, w, h);
     
-    // Pattern 0: Moiré interference
+    // Pattern 0: Overlapping horizontal/vertical moiré
     if (morph < 0.33) {
-      const t = morph / 0.33;
-      const numLines = 80;
+      const numLines = 50;
+      const spacing = h / numLines;
+      const offset = audio.level * 30;
       
+      // Horizontal lines
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.4)`;
+      ctx.lineWidth = 1 + audio.freq * 3;
       for (let i = 0; i < numLines; i++) {
-        const angle1 = (i / numLines) * Math.PI + audio.level * 0.5;
-        const angle2 = angle1 + Math.PI / 3 + audio.freq * 0.3;
-        const offset = i * (w / numLines);
-        
-        ctx.strokeStyle = `hsla(200, 70%, 60%, ${0.3 - t * 0.1})`;
-        ctx.lineWidth = 1 + audio.level * 2;
-        
+        const y = i * spacing + offset;
         ctx.beginPath();
-        ctx.moveTo(0, offset);
-        ctx.lineTo(w, offset + Math.sin(angle1) * 100);
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
         ctx.stroke();
-        
-        ctx.strokeStyle = `hsla(340, 70%, 60%, ${0.3 - t * 0.1})`;
+      }
+      
+      // Vertical lines
+      for (let i = 0; i < numLines; i++) {
+        const x = i * (w / numLines) + offset * 1.3;
         ctx.beginPath();
-        ctx.moveTo(offset, 0);
-        ctx.lineTo(offset + Math.sin(angle2) * 100, h);
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
         ctx.stroke();
       }
     }
     
-    // Pattern 1: Fibonacci spiral lines
+    // Pattern 1: Wave interference lines
     if (morph >= 0.33 && morph < 0.67) {
-      const t = (morph - 0.33) / 0.34;
-      const numSpirals = 8;
+      const numLines = 60;
+      const spacing = h / numLines;
       
-      for (let s = 0; s < numSpirals; s++) {
-        const hue = (s * 45 + audio.level * 120) % 360;
-        ctx.strokeStyle = `hsla(${hue}, 70%, 60%, ${0.5 + t * 0.3})`;
-        ctx.lineWidth = 2 + audio.freq * 4;
-        
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.6)`;
+      ctx.lineWidth = 1 + audio.level * 3;
+      
+      for (let i = 0; i < numLines; i++) {
+        const y = i * spacing;
         ctx.beginPath();
-        for (let i = 0; i < 100; i++) {
-          const fibIdx = i % FIBONACCI.length;
-          const angle = i * 0.1 * PHI + s * 0.5;
-          const radius = FIBONACCI[fibIdx] * 3 * (1 + audio.level * 0.5);
-          const x = w / 2 + radius * Math.cos(angle);
-          const y = h / 2 + radius * Math.sin(angle);
-          
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+        ctx.moveTo(0, y);
+        
+        for (let x = 0; x < w; x += 5) {
+          const wave1 = Math.sin(x * 0.02 + audio.freq * 5) * 20;
+          const wave2 = Math.sin(x * 0.03 - audio.level * 3) * 15;
+          const yOffset = y + wave1 + wave2;
+          ctx.lineTo(x, yOffset);
         }
         ctx.stroke();
       }
     }
     
-    // Pattern 2: Radial golden angle
+    // Pattern 2: Diagonal line moiré
     if (morph >= 0.67) {
-      const t = (morph - 0.67) / 0.33;
-      const numLines = 144;
-      const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+      const numLines = 70;
+      const angle1 = Math.PI / 4 + audio.freq * 0.5;
+      const angle2 = -Math.PI / 4 + audio.level * 0.5;
       
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.4)`;
+      ctx.lineWidth = 1 + audio.freq * 2;
+      
+      // First set of diagonal lines
       for (let i = 0; i < numLines; i++) {
-        const angle = i * goldenAngle;
-        const length = (i / numLines) * Math.min(w, h) * 0.5 * (1 + audio.level);
-        const x1 = w / 2;
-        const y1 = h / 2;
-        const x2 = x1 + length * Math.cos(angle);
-        const y2 = y1 + length * Math.sin(angle);
-        
-        ctx.strokeStyle = `hsla(${(i * 3 + audio.freq * 180) % 360}, 70%, 60%, ${0.4 + t * 0.3})`;
-        ctx.lineWidth = 1 + audio.level * 3;
+        const offset = (i / numLines) * (w + h);
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
+        ctx.moveTo(offset * Math.cos(angle1), offset * Math.sin(angle1));
+        ctx.lineTo(w + offset * Math.cos(angle1), h + offset * Math.sin(angle1));
+        ctx.stroke();
+      }
+      
+      // Second set crossing
+      for (let i = 0; i < numLines; i++) {
+        const offset = (i / numLines) * (w + h);
+        ctx.beginPath();
+        ctx.moveTo(offset * Math.cos(angle2), h - offset * Math.sin(angle2));
+        ctx.lineTo(w + offset * Math.cos(angle2), -offset * Math.sin(angle2));
         ctx.stroke();
       }
     }
   };
 
   const drawTrianglePatterns = (ctx, w, h, morph, audio) => {
-    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, w, h);
     
-    // Pattern 0: Sierpinski-inspired
+    // Pattern 0: Triangle tessellation moiré
     if (morph < 0.33) {
-      const t = morph / 0.33;
-      const drawTriangle = (x, y, size, depth) => {
-        if (depth === 0 || size < 5) {
-          ctx.fillStyle = `hsla(${(depth * 60 + audio.level * 180) % 360}, 70%, 60%, ${0.6 - t * 0.2})`;
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(x + size, y);
-          ctx.lineTo(x + size / 2, y - size * 0.866);
-          ctx.closePath();
-          ctx.fill();
-          return;
-        }
-        
-        const newSize = size / 2 * (1 + audio.freq * 0.2);
-        drawTriangle(x, y, newSize, depth - 1);
-        drawTriangle(x + newSize, y, newSize, depth - 1);
-        drawTriangle(x + newSize / 2, y - newSize * 0.866, newSize, depth - 1);
-      };
+      const rows = 20;
+      const cols = 25;
+      const cellW = w / cols;
+      const cellH = h / rows;
+      const offset = audio.level * 15;
       
-      drawTriangle(w / 4, h * 0.75, w / 2, 5);
-    }
-    
-    // Pattern 1: Golden triangle tessellation
-    if (morph >= 0.33 && morph < 0.67) {
-      const t = (morph - 0.33) / 0.34;
-      const rows = 10;
-      const cols = 12;
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.6)`;
+      ctx.lineWidth = 1 + audio.freq * 2;
       
       for (let i = 0; i < rows; i++) {
         for (let j = 0; j < cols; j++) {
-          const x = (w / cols) * j;
-          const y = (h / rows) * i;
-          const size = (w / cols) * (1 + audio.level * 0.3);
-          const rotation = (i * j) * 0.1 + audio.freq * Math.PI;
+          const x = j * cellW + offset;
+          const y = i * cellH;
+          const flip = (i + j) % 2 === 0;
           
-          ctx.save();
-          ctx.translate(x + size / 2, y + size / 2);
-          ctx.rotate(rotation);
-          
-          ctx.fillStyle = `hsla(${((i + j) * 30 + audio.level * 180) % 360}, 70%, 60%, ${0.5 + t * 0.3})`;
           ctx.beginPath();
-          ctx.moveTo(0, -size / 2 / PHI);
-          ctx.lineTo(size / 2, size / 2 / PHI);
-          ctx.lineTo(-size / 2, size / 2 / PHI);
+          if (flip) {
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + cellW, y);
+            ctx.lineTo(x + cellW/2, y + cellH);
+          } else {
+            ctx.moveTo(x, y + cellH);
+            ctx.lineTo(x + cellW, y + cellH);
+            ctx.lineTo(x + cellW/2, y);
+          }
           ctx.closePath();
-          ctx.fill();
-          
-          ctx.restore();
+          ctx.stroke();
         }
       }
     }
     
-    // Pattern 2: Concentric triangular waves
-    if (morph >= 0.67) {
-      const t = (morph - 0.67) / 0.33;
-      const numRings = 20;
+    // Pattern 1: Overlapping triangle grids
+    if (morph >= 0.33 && morph < 0.67) {
+      const gridSize = 15;
+      const size = Math.min(w, h) / gridSize;
+      const offset1 = audio.level * 20;
+      const offset2 = audio.freq * 30;
       
-      for (let i = 0; i < numRings; i++) {
-        const radius = (i + 1) * 30 * (1 + audio.level * 0.5);
-        const rotation = i * 0.3 + Date.now() * 0.001 * audio.freq;
-        const sides = 3;
-        
-        ctx.strokeStyle = `hsla(${(i * 18 + audio.freq * 180) % 360}, 70%, 60%, ${0.6 + t * 0.2})`;
-        ctx.lineWidth = 2 + audio.level * 3;
-        ctx.beginPath();
-        
-        for (let j = 0; j <= sides; j++) {
-          const angle = (j / sides) * Math.PI * 2 + rotation;
-          const x = w / 2 + radius * Math.cos(angle);
-          const y = h / 2 + radius * Math.sin(angle);
-          if (j === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.5)`;
+      ctx.lineWidth = 1 + audio.level * 2;
+      
+      // First layer
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const x = j * size + offset1;
+          const y = i * size;
+          
+          ctx.beginPath();
+          ctx.moveTo(x + size/2, y);
+          ctx.lineTo(x + size, y + size);
+          ctx.lineTo(x, y + size);
+          ctx.closePath();
+          ctx.stroke();
         }
-        ctx.stroke();
       }
+      
+      // Second layer
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const x = j * size;
+          const y = i * size + offset2;
+          
+          ctx.beginPath();
+          ctx.moveTo(x + size/2, y);
+          ctx.lineTo(x + size, y + size);
+          ctx.lineTo(x, y + size);
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+    }
+    
+    // Pattern 2: Rotated triangle grid moiré
+    if (morph >= 0.67) {
+      const gridSize = 18;
+      const spacing = Math.min(w, h) / gridSize;
+      const rotation = audio.freq * Math.PI * 0.2;
+      
+      ctx.save();
+      ctx.translate(w/2, h/2);
+      ctx.rotate(rotation);
+      ctx.translate(-w/2, -h/2);
+      
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.4)`;
+      ctx.lineWidth = 1 + audio.level * 2;
+      
+      for (let i = -gridSize; i < gridSize * 2; i++) {
+        for (let j = -gridSize; j < gridSize * 2; j++) {
+          const x = j * spacing;
+          const y = i * spacing;
+          const size = spacing * 0.9;
+          
+          ctx.beginPath();
+          ctx.moveTo(x + size/2, y);
+          ctx.lineTo(x + size, y + size);
+          ctx.lineTo(x, y + size);
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+      
+      ctx.restore();
     }
   };
 
   const drawSquarePatterns = (ctx, w, h, morph, audio) => {
-    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, w, h);
     
-    // Pattern 0: Checkerboard moiré
+    // Pattern 0: Grid moiré
     if (morph < 0.33) {
-      const t = morph / 0.33;
-      const gridSize = 20;
+      const gridSize = 30;
       const cellSize = Math.min(w, h) / gridSize;
+      const offset = audio.level * 25;
       
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.5)`;
+      ctx.lineWidth = 1 + audio.freq * 2;
+      
+      // First grid
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          const x = i * cellSize + Math.sin(j * 0.5 + audio.freq * 5) * 10;
-          const y = j * cellSize + Math.cos(i * 0.5 + audio.level * 5) * 10;
-          
-          const hue = ((i + j) * 20 + audio.level * 180) % 360;
-          ctx.fillStyle = `hsla(${hue}, 70%, 60%, ${0.5 - t * 0.2})`;
-          ctx.fillRect(x, y, cellSize * 0.9, cellSize * 0.9);
+          const x = i * cellSize + offset;
+          const y = j * cellSize;
+          ctx.strokeRect(x, y, cellSize * 0.8, cellSize * 0.8);
+        }
+      }
+      
+      // Second grid overlapping
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const x = i * cellSize;
+          const y = j * cellSize + offset * 1.2;
+          ctx.strokeRect(x, y, cellSize * 0.8, cellSize * 0.8);
         }
       }
     }
     
-    // Pattern 1: Fibonacci square spiral
+    // Pattern 1: Rotated square grid moiré
     if (morph >= 0.33 && morph < 0.67) {
-      const t = (morph - 0.33) / 0.34;
-      let x = w / 2;
-      let y = h / 2;
-      let direction = 0;
+      const gridSize = 20;
+      const cellSize = Math.min(w, h) / gridSize;
+      const rotation = audio.freq * Math.PI * 0.15;
       
-      for (let i = 0; i < FIBONACCI.length; i++) {
-        const size = FIBONACCI[i] * 8 * (1 + audio.level * 0.3);
-        const hue = (i * 30 + audio.freq * 180) % 360;
-        
-        ctx.strokeStyle = `hsla(${hue}, 70%, 60%, ${0.6 + t * 0.3})`;
-        ctx.lineWidth = 3 + audio.level * 4;
-        ctx.strokeRect(x, y, size, size);
-        
-        // Move to next position in spiral
-        if (direction === 0) x += size;
-        else if (direction === 1) y += size;
-        else if (direction === 2) x -= size;
-        else y -= size;
-        
-        direction = (direction + 1) % 4;
+      ctx.save();
+      ctx.translate(w/2, h/2);
+      ctx.rotate(rotation);
+      ctx.translate(-w/2, -h/2);
+      
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.4)`;
+      ctx.lineWidth = 1 + audio.level * 2;
+      
+      for (let i = -gridSize; i < gridSize * 2; i++) {
+        for (let j = -gridSize; j < gridSize * 2; j++) {
+          const x = i * cellSize;
+          const y = j * cellSize;
+          ctx.strokeRect(x, y, cellSize * 0.9, cellSize * 0.9);
+        }
+      }
+      
+      ctx.restore();
+      
+      // Static grid on top
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.3)`;
+      ctx.lineWidth = 1 + audio.level * 2;
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const x = i * cellSize;
+          const y = j * cellSize;
+          ctx.strokeRect(x, y, cellSize * 0.9, cellSize * 0.9);
+        }
       }
     }
     
-    // Pattern 2: Nested golden rectangles
+    // Pattern 2: Nested square waves
     if (morph >= 0.67) {
-      const t = (morph - 0.67) / 0.33;
-      const maxSize = Math.min(w, h) * 0.8;
-      let size = maxSize;
+      const rows = 15;
+      const cols = 20;
+      const cellW = w / cols;
+      const cellH = h / rows;
       
-      for (let i = 0; i < 20; i++) {
-        const rotation = i * 0.15 + audio.freq * Math.PI;
-        const scale = 1 + audio.level * 0.2;
-        
-        ctx.save();
-        ctx.translate(w / 2, h / 2);
-        ctx.rotate(rotation);
-        
-        const rectW = size * scale;
-        const rectH = size / PHI * scale;
-        
-        ctx.strokeStyle = `hsla(${(i * 18 + audio.level * 180) % 360}, 70%, 60%, ${0.5 + t * 0.3})`;
-        ctx.lineWidth = 2 + audio.level * 3;
-        ctx.strokeRect(-rectW / 2, -rectH / 2, rectW, rectH);
-        
-        ctx.restore();
-        
-        size *= 0.85;
+      ctx.strokeStyle = `rgba(0, 0, 0, 0.6)`;
+      ctx.lineWidth = 1 + audio.freq * 2;
+      
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+          const x = j * cellW;
+          const y = i * cellH + Math.sin(j * 0.5 + audio.level * 5) * 20;
+          const size = cellW * 0.7;
+          
+          ctx.strokeRect(x, y, size, size);
+        }
       }
     }
   };
@@ -422,58 +475,68 @@ const AudioPatternMorpher = () => {
   };
 
   return (
-    <div className="w-full h-screen bg-black overflow-hidden relative">
+    <div className="w-full h-screen bg-white overflow-hidden relative">
       <canvas
         ref={canvasRef}
         className="absolute inset-0"
       />
       
-      <div className="absolute top-4 left-4 bg-black bg-opacity-80 p-4 rounded-lg text-white space-y-4 z-10">
-        <button
-          onClick={isListening ? stopAudio : startAudio}
-          className="w-full px-4 py-2 bg-white text-black rounded hover:bg-gray-200"
-        >
-          {isListening ? 'Stop' : 'Start Audio'}
-        </button>
-        
-        <div className="space-y-2">
-          <label className="text-xs">Shape</label>
-          <div className="grid grid-cols-2 gap-2">
-            {['dot', 'line', 'triangle', 'square'].map(shape => (
-              <button
-                key={shape}
-                onClick={() => setSelectedShape(shape)}
-                className={`px-3 py-1 rounded text-xs ${
-                  selectedShape === shape 
-                    ? 'bg-white text-black' 
-                    : 'bg-gray-800 text-white hover:bg-gray-700'
-                }`}
-              >
-                {shape}
-              </button>
-            ))}
+      <div className="absolute top-6 left-6 bg-white bg-opacity-95 backdrop-blur-xl rounded-2xl shadow-lg border border-gray-200 overflow-hidden z-10" style={{ width: '240px' }}>
+        <div className="p-6 space-y-6">
+          <button
+            onClick={isListening ? stopAudio : startAudio}
+            className="w-full h-11 bg-black text-white rounded-full font-medium text-sm hover:bg-gray-800 transition-colors flex items-center justify-center gap-2"
+          >
+            {isListening ? '◼' : '▶'} {isListening ? 'Stop' : 'Start'}
+          </button>
+          
+          <div className="space-y-3">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Shape</label>
+            <div className="grid grid-cols-2 gap-2">
+              {['dot', 'line', 'triangle', 'square'].map(shape => (
+                <button
+                  key={shape}
+                  onClick={() => setSelectedShape(shape)}
+                  className={`h-10 rounded-lg text-xs font-medium transition-all ${
+                    selectedShape === shape 
+                      ? 'bg-black text-white shadow-sm' 
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {shape}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-        
-        <div className="space-y-2">
-          <label className="text-xs">Pattern Morph</label>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={morphValue}
-            onChange={(e) => setMorphValue(parseFloat(e.target.value))}
-            className="w-full"
-          />
-          <div className="text-xs text-gray-400">
-            {morphValue < 0.33 ? 'Pattern A' : morphValue < 0.67 ? 'Pattern B' : 'Pattern C'}
+          
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Morph</label>
+              <span className="text-xs text-gray-400 font-mono">
+                {morphValue < 0.33 ? 'A' : morphValue < 0.67 ? 'B' : 'C'}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={morphValue}
+              onChange={(e) => setMorphValue(parseFloat(e.target.value))}
+              className="w-full h-1 bg-gray-200 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black"
+            />
           </div>
-        </div>
-        
-        <div className="text-xs space-y-1">
-          <div>Audio: {(audioLevel * 100).toFixed(0)}%</div>
-          <div>Freq: {(frequency * 100).toFixed(0)}%</div>
+          
+          <div className="pt-4 border-t border-gray-200 space-y-2">
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500 font-medium">Level</span>
+              <span className="text-gray-900 font-mono">{(audioLevel * 100).toFixed(0)}%</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500 font-medium">Freq</span>
+              <span className="text-gray-900 font-mono">{(frequency * 100).toFixed(0)}%</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
