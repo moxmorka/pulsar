@@ -1,41 +1,33 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, Download } from 'lucide-react';
 
-const MoireAudioReactive = () => {
+const Bruno = () => {
   const canvasRef = useRef(null);
-  const [isAnimating, setIsAnimating] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [drawingEnabled, setDrawingEnabled] = useState(false);
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
-  const drawnLinesRef = useRef([]);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
-  const audioDataRef = useRef(null);
   const animationRef = useRef(null);
+  const elementsRef = useRef([]);
   
   const [audioLevels, setAudioLevels] = useState({ bass: 0, mid: 0, high: 0 });
-  const [preset, setPreset] = useState('flow');
   
-  const presets = {
-    flow: { name: 'Flow', density: 15, complexity: 1 },
-    waves: { name: 'Waves', density: 20, complexity: 1 },
-    chaos: { name: 'Chaos', density: 30, complexity: 1 },
-    grid: { name: 'Grid', density: 12, complexity: 1 }
-  };
-
   const [settings, setSettings] = useState({
-    audioSensitivity: 1.0,
-    morphSpeed: 0.4,
-    lineWeight: 1.5,
-    patternDensity: 15,
-    shearAmount: 0.5,
-    scaleVariation: 1.2,
-    pixelationEnabled: false,
-    pixelSize: 4,
-    minLines: 1,
-    maxLines: 30
+    primitive: 'dot',
+    growthRate: 0.5,
+    audioSensitivity: 2.0,
+    maxElements: 500,
+    lineWeight: 1
   });
+
+  const primitives = {
+    dot: { name: 'Dots', icon: '●' },
+    line: { name: 'Lines', icon: '│' },
+    square: { name: 'Squares', icon: '■' },
+    circle: { name: 'Circles', icon: '○' }
+  };
 
   useEffect(() => {
     const getDevices = async () => {
@@ -56,7 +48,6 @@ const MoireAudioReactive = () => {
   useEffect(() => {
     if (!audioEnabled) {
       if (audioContextRef.current) audioContextRef.current.close();
-      audioDataRef.current = null;
       return;
     }
 
@@ -94,7 +85,6 @@ const MoireAudioReactive = () => {
           const bufferLength = analyserRef.current.frequencyBinCount;
           const dataArray = new Uint8Array(bufferLength);
           analyserRef.current.getByteFrequencyData(dataArray);
-          audioDataRef.current = dataArray;
           
           const bass = dataArray.slice(0, Math.floor(bufferLength * 0.15));
           const mid = dataArray.slice(Math.floor(bufferLength * 0.15), Math.floor(bufferLength * 0.5));
@@ -116,141 +106,109 @@ const MoireAudioReactive = () => {
     return () => { if (audioContextRef.current) audioContextRef.current.close(); };
   }, [audioEnabled, selectedDevice]);
 
-  const noise = (() => {
-    const p = new Array(512).fill(0).map(() => Math.floor(Math.random() * 256));
-    return (x, y) => {
-      const X = Math.floor(x) & 255;
-      const Y = Math.floor(y) & 255;
-      x -= Math.floor(x);
-      y -= Math.floor(y);
-      const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
-      const lerp = (t, a, b) => a + t * (b - a);
-      const u = fade(x);
-      const v = fade(y);
-      const A = p[X] + Y;
-      const B = p[X + 1] + Y;
-      return lerp(v, lerp(u, p[A] / 128 - 1, p[B] / 128 - 1), lerp(u, p[A + 1] / 128 - 1, p[B + 1] / 128 - 1));
-    };
-  })();
-
-  const drawMoirePattern = (ctx, width, height, t, patternType, layerIndex, audioLevels) => {
-    const bass = audioLevels.bass * settings.audioSensitivity;
-    const mid = audioLevels.mid * settings.audioSensitivity;
-    const high = audioLevels.high * settings.audioSensitivity;
+  const generateNewElements = (bass, mid, high, centerX, centerY) => {
+    const overallLevel = (bass + mid + high) / 3;
     
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const shearX = Math.sin(t * 0.7 + layerIndex * 0.8) * settings.shearAmount + mid * 0.3;
-    const shearY = Math.cos(t * 0.5 + layerIndex * 1.2) * settings.shearAmount * 0.7 + bass * 0.2;
-    const scale = 1 + Math.sin(t + layerIndex) * 0.3 * settings.scaleVariation + mid * 0.5;
-    const offset = Math.cos(t * 0.7 + layerIndex * 0.8) * 50 + high * 100;
+    if (overallLevel < 0.15) return;
     
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    ctx.transform(1, shearY, shearX, 1, 0, 0);
-    ctx.scale(scale, scale);
-    ctx.translate(-centerX, -centerY);
+    const shouldGenerate = Math.random() < (overallLevel * settings.growthRate);
+    if (!shouldGenerate || elementsRef.current.length >= settings.maxElements) return;
     
-    const density = settings.patternDensity + Math.floor(mid * 20);
-    const spacing = Math.max(5, 40 - density + bass * 30);
+    const newElements = [];
+    const count = Math.floor(1 + bass * settings.audioSensitivity * 3);
     
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = settings.lineWeight;
-    
-    if (patternType === 0) {
-      for (let i = -width; i < width * 2; i += spacing) {
-        ctx.beginPath();
-        for (let y = -height; y < height * 2; y += 2) {
-          const x = i + Math.sin(y * 0.02 + t + layerIndex + bass * 3) * (30 + mid * 40);
-          const xNoise = x + noise(x * 0.01, y * 0.01 + t * 0.2) * (20 + high * 30);
-          ctx.lineTo(xNoise + offset, y);
-        }
-        ctx.stroke();
+    for (let i = 0; i < count; i++) {
+      if (elementsRef.current.length >= settings.maxElements) break;
+      
+      let element;
+      
+      if (settings.primitive === 'dot') {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = mid * 300 + Math.random() * 100;
+        const size = 2 + high * 8;
+        
+        element = {
+          type: 'dot',
+          x: centerX + Math.cos(angle) * distance,
+          y: centerY + Math.sin(angle) * distance,
+          size: size,
+          age: 0,
+          vx: Math.cos(angle) * bass * 2,
+          vy: Math.sin(angle) * bass * 2
+        };
+      } else if (settings.primitive === 'line') {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = mid * 200;
+        const length = 20 + bass * 100;
+        const rotation = high * Math.PI;
+        
+        element = {
+          type: 'line',
+          x: centerX + Math.cos(angle) * distance,
+          y: centerY + Math.sin(angle) * distance,
+          length: length,
+          rotation: rotation,
+          age: 0,
+          angularVel: (Math.random() - 0.5) * mid * 0.1
+        };
+      } else if (settings.primitive === 'square') {
+        const gridPos = Math.floor(Math.random() * 10);
+        const size = 10 + mid * 40;
+        
+        element = {
+          type: 'square',
+          x: centerX + (gridPos % 5 - 2) * (50 + bass * 50),
+          y: centerY + (Math.floor(gridPos / 5) - 1) * (50 + bass * 50),
+          size: size,
+          rotation: high * Math.PI * 2,
+          age: 0,
+          scale: 0.1
+        };
+      } else if (settings.primitive === 'circle') {
+        const radius = 50 + mid * 200;
+        const angle = Math.random() * Math.PI * 2;
+        const thickness = 1 + high * 5;
+        
+        element = {
+          type: 'circle',
+          x: centerX,
+          y: centerY,
+          radius: radius,
+          thickness: thickness,
+          age: 0,
+          growth: bass * 2
+        };
       }
-    } else if (patternType === 1) {
-      for (let i = -height; i < height * 2; i += spacing) {
-        ctx.beginPath();
-        for (let x = -width; x < width * 2; x += 2) {
-          const y = i + Math.cos(x * 0.02 + t + layerIndex + mid * 3) * (30 + bass * 40);
-          const yNoise = y + noise(x * 0.01 + t * 0.2, y * 0.01) * (20 + high * 30);
-          ctx.lineTo(x, yNoise + offset);
-        }
-        ctx.stroke();
-      }
-    } else if (patternType === 2) {
-      for (let i = -height; i < height * 2; i += spacing) {
-        ctx.beginPath();
-        for (let x = -width; x < width * 2; x += 2) {
-          const y = i + Math.sin(x * 0.03 + t * 1.2 + layerIndex + bass * 4) * (35 + mid * 45);
-          const yNoise = y + noise(x * 0.012 + t * 0.25, y * 0.012) * (25 + high * 35);
-          ctx.lineTo(x, yNoise + offset * 0.8);
-        }
-        ctx.stroke();
-      }
-    } else {
-      for (let i = -width; i < width * 2; i += spacing * 1.5) {
-        ctx.beginPath();
-        for (let y = -height; y < height * 2; y += 2) {
-          const x = i + Math.sin(y * 0.03 + t * 1.5 + layerIndex + bass * 4) * (40 + mid * 50);
-          const xNoise = x + noise(x * 0.015, y * 0.015 + t * 0.3) * (25 + high * 35);
-          ctx.lineTo(xNoise + offset * 1.5, y);
-        }
-        ctx.stroke();
-      }
+      
+      newElements.push(element);
     }
-    ctx.restore();
+    
+    elementsRef.current = [...elementsRef.current, ...newElements];
   };
 
-  const drawFigure = (ctx, type, size) => {
-    const cx = size / 2;
-    const cy = size / 2;
+  const updateElements = () => {
+    elementsRef.current = elementsRef.current.filter(el => el.age < 200);
     
-    if (type === 'face') {
-      ctx.arc(cx, cy, size * 0.35, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(cx - size * 0.12, cy - size * 0.08, size * 0.06, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx + size * 0.12, cy - size * 0.08, size * 0.06, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx, cy + size * 0.1, size * 0.15, 0, Math.PI);
-      ctx.stroke();
-    } else if (type === 'tree') {
-      ctx.moveTo(cx, size * 0.7);
-      ctx.lineTo(cx, size * 0.3);
-      ctx.stroke();
-      for (let i = 0; i < 3; i++) {
-        ctx.beginPath();
-        ctx.arc(cx, size * 0.25 - i * size * 0.08, size * 0.15 - i * size * 0.03, 0, Math.PI * 2);
-        ctx.stroke();
+    elementsRef.current.forEach(el => {
+      el.age++;
+      
+      if (el.type === 'dot') {
+        el.x += el.vx;
+        el.y += el.vy;
+        el.vx *= 0.99;
+        el.vy *= 0.99;
+      } else if (el.type === 'line') {
+        el.rotation += el.angularVel;
+      } else if (el.type === 'square') {
+        el.scale = Math.min(1, el.scale + 0.05);
+      } else if (el.type === 'circle') {
+        el.radius += el.growth;
+        el.growth *= 0.98;
       }
-    } else if (type === 'sun') {
-      ctx.arc(cx, cy, size * 0.15, 0, Math.PI * 2);
-      ctx.stroke();
-      for (let i = 0; i < 12; i++) {
-        const angle = (i * Math.PI * 2) / 12;
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(angle) * size * 0.2, cy + Math.sin(angle) * size * 0.2);
-        ctx.lineTo(cx + Math.cos(angle) * size * 0.35, cy + Math.sin(angle) * size * 0.35);
-        ctx.stroke();
-      }
-    } else if (type === 'cat') {
-      ctx.arc(cx, cy, size * 0.25, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(cx - size * 0.2, cy - size * 0.25);
-      ctx.lineTo(cx - size * 0.25, cy - size * 0.4);
-      ctx.lineTo(cx - size * 0.15, cy - size * 0.3);
-      ctx.moveTo(cx + size * 0.2, cy - size * 0.25);
-      ctx.lineTo(cx + size * 0.25, cy - size * 0.4);
-      ctx.lineTo(cx + size * 0.15, cy - size * 0.3);
-      ctx.stroke();
-    }
+    });
   };
 
-  const render = (time = 0) => {
+  const render = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
@@ -270,144 +228,60 @@ const MoireAudioReactive = () => {
     ctx.fill();
     
     if (!audioEnabled || !drawingEnabled) {
+      elementsRef.current = [];
       return;
     }
     
-    const audioLevelsData = audioLevels;
-    const bass = audioLevelsData.bass;
-    const mid = audioLevelsData.mid;
-    const high = audioLevelsData.high;
-    const overallAudioLevel = (bass + mid + high) / 3;
-    
-    if (overallAudioLevel < 0.15) {
-      return;
-    }
+    generateNewElements(audioLevels.bass, audioLevels.mid, audioLevels.high, centerX, centerY);
+    updateElements();
     
     ctx.strokeStyle = '#000000';
+    ctx.fillStyle = '#000000';
     ctx.lineWidth = settings.lineWeight;
     
-    const lineCount = Math.floor(5 + (overallAudioLevel * settings.audioSensitivity * 25));
-    
-    if (bass > 0.3) {
-      for (let i = 0; i < lineCount; i++) {
-        const angle = (i / lineCount) * Math.PI * 2;
-        const radius = 50 + (bass * 300);
-        const segments = Math.floor(3 + mid * 20);
-        
-        ctx.beginPath();
-        for (let s = 0; s <= segments; s++) {
-          const t = s / segments;
-          const r = radius * (1 + Math.sin(t * Math.PI * 4 + high * 10) * mid * 0.5);
-          const x = centerX + Math.cos(angle + t * bass * 2) * r;
-          const y = centerY + Math.sin(angle + t * bass * 2) * r;
-          if (s === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-    }
-    
-    if (mid > 0.3) {
-      const gridSize = Math.floor(3 + mid * 12);
-      const cellSize = Math.min(width, height) / gridSize;
-      const distortion = high * 50;
+    elementsRef.current.forEach(el => {
+      const alpha = Math.max(0, 1 - (el.age / 200));
+      ctx.globalAlpha = alpha;
       
-      for (let y = 0; y < gridSize; y++) {
+      if (el.type === 'dot') {
         ctx.beginPath();
-        for (let x = 0; x < gridSize; x++) {
-          const px = x * cellSize + Math.sin(y * 0.5 + bass * 5) * distortion;
-          const py = y * cellSize + Math.cos(x * 0.5 + bass * 5) * distortion;
-          if (x === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
+        ctx.arc(el.x, el.y, el.size, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (el.type === 'line') {
+        ctx.save();
+        ctx.translate(el.x, el.y);
+        ctx.rotate(el.rotation);
+        ctx.beginPath();
+        ctx.moveTo(-el.length / 2, 0);
+        ctx.lineTo(el.length / 2, 0);
+        ctx.stroke();
+        ctx.restore();
+      } else if (el.type === 'square') {
+        ctx.save();
+        ctx.translate(el.x, el.y);
+        ctx.rotate(el.rotation);
+        ctx.scale(el.scale, el.scale);
+        ctx.strokeRect(-el.size / 2, -el.size / 2, el.size, el.size);
+        ctx.restore();
+      } else if (el.type === 'circle') {
+        ctx.beginPath();
+        ctx.arc(el.x, el.y, el.radius, 0, Math.PI * 2);
+        ctx.lineWidth = el.thickness;
         ctx.stroke();
       }
-      
-      for (let x = 0; x < gridSize; x++) {
-        ctx.beginPath();
-        for (let y = 0; y < gridSize; y++) {
-          const px = x * cellSize + Math.sin(y * 0.5 + bass * 5) * distortion;
-          const py = y * cellSize + Math.cos(x * 0.5 + bass * 5) * distortion;
-          if (y === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.stroke();
-      }
-    }
+    });
     
-    if (high > 0.4) {
-      const spirals = Math.floor(2 + high * 8);
-      for (let sp = 0; sp < spirals; sp++) {
-        const offset = (sp / spirals) * Math.PI * 2;
-        ctx.beginPath();
-        for (let i = 0; i < 100; i++) {
-          const t = i / 100;
-          const angle = t * Math.PI * 4 + offset;
-          const radius = t * (bass * 200 + mid * 150) * (1 + Math.sin(t * 20) * high * 0.3);
-          const x = centerX + Math.cos(angle) * radius;
-          const y = centerY + Math.sin(angle) * radius;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-    }
-    
-    if (bass > 0.2 && mid > 0.2) {
-      const rings = Math.floor(3 + bass * 10);
-      for (let r = 0; r < rings; r++) {
-        const radius = (r + 1) * (30 + mid * 80);
-        const segments = Math.floor(20 + high * 40);
-        
-        ctx.beginPath();
-        for (let i = 0; i <= segments; i++) {
-          const angle = (i / segments) * Math.PI * 2;
-          const wobble = Math.sin(i * 0.5 + bass * 10) * high * 30;
-          const x = centerX + Math.cos(angle) * (radius + wobble);
-          const y = centerY + Math.sin(angle) * (radius + wobble);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-        ctx.stroke();
-      }
-    }
-    
-    if (settings.pixelationEnabled && settings.pixelSize > 1) {
-      const imageData = ctx.getImageData(0, 0, width, height);
-      const pixelatedData = ctx.createImageData(width, height);
-      for (let y = 0; y < height; y += settings.pixelSize) {
-        for (let x = 0; x < width; x += settings.pixelSize) {
-          const sampleX = Math.min(x + Math.floor(settings.pixelSize / 2), width - 1);
-          const sampleY = Math.min(y + Math.floor(settings.pixelSize / 2), height - 1);
-          const sampleIndex = (sampleY * width + sampleX) * 4;
-          const r = imageData.data[sampleIndex];
-          const g = imageData.data[sampleIndex + 1];
-          const b = imageData.data[sampleIndex + 2];
-          const a = imageData.data[sampleIndex + 3];
-          for (let py = y; py < Math.min(y + settings.pixelSize, height); py++) {
-            for (let px = x; px < Math.min(x + settings.pixelSize, width); px++) {
-              const index = (py * width + px) * 4;
-              pixelatedData.data[index] = r;
-              pixelatedData.data[index + 1] = g;
-              pixelatedData.data[index + 2] = b;
-              pixelatedData.data[index + 3] = a;
-            }
-          }
-        }
-      }
-      ctx.putImageData(pixelatedData, 0, 0);
-    }
+    ctx.globalAlpha = 1;
   };
 
   useEffect(() => {
-    const animate = (time) => {
-      render(time);
+    const animate = () => {
+      render();
       animationRef.current = requestAnimationFrame(animate);
     };
     animationRef.current = requestAnimationFrame(animate);
     return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
-  }, [settings, isAnimating, audioEnabled, preset, audioLevels]);
+  }, [settings, audioEnabled, drawingEnabled, audioLevels]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -429,10 +303,13 @@ const MoireAudioReactive = () => {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <h1 className="text-2xl font-light tracking-tight text-gray-900">Bruno</h1>
           <div className="flex items-center gap-3">
-            <button onClick={() => setIsAnimating(!isAnimating)} className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-gray-800">
-              {isAnimating ? <><Pause size={16} /> Pause</> : <><Play size={16} /> Play</>}
+            <button onClick={() => {
+              elementsRef.current = [];
+              setDrawingEnabled(false);
+            }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-100 text-gray-900 text-sm font-medium hover:bg-gray-200">
+              Clear
             </button>
-            <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'moire.png'; link.href = canvas.toDataURL(); link.click(); }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-100 text-gray-900 text-sm font-medium hover:bg-gray-200">
+            <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'bruno.png'; link.href = canvas.toDataURL(); link.click(); }} className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-100 text-gray-900 text-sm font-medium hover:bg-gray-200">
               <Download size={16} /> Export
             </button>
           </div>
@@ -442,10 +319,11 @@ const MoireAudioReactive = () => {
       <div className="flex-1 flex">
         <div className="w-80 bg-gray-50 border-r border-gray-200 overflow-y-auto p-6 space-y-6">
           <div>
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Presets</h3>
-            <div className="space-y-2">
-              {Object.entries(presets).map(([key, p]) => (
-                <button key={key} onClick={() => setPreset(key)} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium ${preset === key ? 'bg-black text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`}>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Primitive</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(primitives).map(([key, p]) => (
+                <button key={key} onClick={() => setSettings(prev => ({ ...prev, primitive: key }))} className={`px-4 py-3 rounded-xl text-sm font-medium transition-all ${settings.primitive === key ? 'bg-black text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`}>
+                  <div className="text-2xl mb-1">{p.icon}</div>
                   {p.name}
                 </button>
               ))}
@@ -473,11 +351,7 @@ const MoireAudioReactive = () => {
                 {audioDevices.length > 0 && (
                   <div className="bg-white rounded-xl p-3">
                     <div className="text-xs text-gray-600 mb-2">Audio Input Device</div>
-                    <select 
-                      value={selectedDevice || ''} 
-                      onChange={(e) => setSelectedDevice(e.target.value)}
-                      className="w-full p-2 border border-gray-300 rounded-lg text-xs"
-                    >
+                    <select value={selectedDevice || ''} onChange={(e) => setSelectedDevice(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg text-xs">
                       {audioDevices.map(device => (
                         <option key={device.deviceId} value={device.deviceId}>
                           {device.label || `Device ${device.deviceId.substring(0, 8)}`}
@@ -515,12 +389,13 @@ const MoireAudioReactive = () => {
                       <div className="bg-black h-1.5 rounded-full" style={{ width: (audioLevels.high * 100) + '%' }} />
                     </div>
                   </div>
-                  <div className="text-xs text-gray-500 mt-2 p-2 bg-gray-50 rounded">
-                    Threshold: 15% - Lines appear when audio exceeds this level
-                  </div>
                 </div>
+                
                 <div className="bg-white rounded-xl p-3">
-                  <div className="flex justify-between text-xs text-gray-600 mb-2"><span>Sensitivity</span><span>{settings.audioSensitivity.toFixed(1)}x</span></div>
+                  <div className="flex justify-between text-xs text-gray-600 mb-2">
+                    <span>Sensitivity</span>
+                    <span>{settings.audioSensitivity.toFixed(1)}x</span>
+                  </div>
                   <input type="range" min="0.5" max="10" step="0.1" value={settings.audioSensitivity} onChange={(e) => setSettings(prev => ({ ...prev, audioSensitivity: parseFloat(e.target.value) }))} className="w-full accent-black" />
                 </div>
               </div>
@@ -529,20 +404,28 @@ const MoireAudioReactive = () => {
 
           <div className="bg-white rounded-xl p-3 space-y-3">
             <h3 className="text-sm font-semibold text-gray-900">Controls</h3>
-            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Speed</span><span>{settings.morphSpeed.toFixed(1)}</span></div><input type="range" min="0.1" max="2" step="0.1" value={settings.morphSpeed} onChange={(e) => setSettings(prev => ({ ...prev, morphSpeed: parseFloat(e.target.value) }))} className="w-full accent-black" /></div>
-            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Line Weight</span><span>{settings.lineWeight.toFixed(1)}</span></div><input type="range" min="0.5" max="4" step="0.1" value={settings.lineWeight} onChange={(e) => setSettings(prev => ({ ...prev, lineWeight: parseFloat(e.target.value) }))} className="w-full accent-black" /></div>
-            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Density</span><span>{settings.patternDensity}</span></div><input type="range" min="5" max="40" value={settings.patternDensity} onChange={(e) => setSettings(prev => ({ ...prev, patternDensity: parseInt(e.target.value) }))} className="w-full accent-black" /></div>
-            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Shear</span><span>{settings.shearAmount.toFixed(1)}</span></div><input type="range" min="0" max="2" step="0.1" value={settings.shearAmount} onChange={(e) => setSettings(prev => ({ ...prev, shearAmount: parseFloat(e.target.value) }))} className="w-full accent-black" /></div>
-            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Min Lines</span><span>{settings.minLines}</span></div><input type="range" min="1" max="10" value={settings.minLines} onChange={(e) => setSettings(prev => ({ ...prev, minLines: parseInt(e.target.value) }))} className="w-full accent-black" /></div>
-            <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Max Lines</span><span>{settings.maxLines}</span></div><input type="range" min="10" max="100" value={settings.maxLines} onChange={(e) => setSettings(prev => ({ ...prev, maxLines: parseInt(e.target.value) }))} className="w-full accent-black" /></div>
+            <div>
+              <div className="flex justify-between text-xs text-gray-600 mb-2">
+                <span>Growth Rate</span>
+                <span>{settings.growthRate.toFixed(1)}</span>
+              </div>
+              <input type="range" min="0.1" max="2" step="0.1" value={settings.growthRate} onChange={(e) => setSettings(prev => ({ ...prev, growthRate: parseFloat(e.target.value) }))} className="w-full accent-black" />
+            </div>
+            <div>
+              <div className="flex justify-between text-xs text-gray-600 mb-2">
+                <span>Max Elements</span>
+                <span>{settings.maxElements}</span>
+              </div>
+              <input type="range" min="100" max="2000" step="50" value={settings.maxElements} onChange={(e) => setSettings(prev => ({ ...prev, maxElements: parseInt(e.target.value) }))} className="w-full accent-black" />
+            </div>
+            <div>
+              <div className="flex justify-between text-xs text-gray-600 mb-2">
+                <span>Line Weight</span>
+                <span>{settings.lineWeight}</span>
+              </div>
+              <input type="range" min="0.5" max="4" step="0.5" value={settings.lineWeight} onChange={(e) => setSettings(prev => ({ ...prev, lineWeight: parseFloat(e.target.value) }))} className="w-full accent-black" />
+            </div>
           </div>
-
-          <div className="bg-white rounded-xl p-3 space-y-3">
-            <div className="flex items-center justify-between"><span className="text-sm font-semibold text-gray-900">Pixelation</span><label className="relative inline-flex items-center cursor-pointer"><input type="checkbox" checked={settings.pixelationEnabled} onChange={(e) => setSettings(prev => ({ ...prev, pixelationEnabled: e.target.checked }))} className="sr-only peer" /><div className="w-11 h-6 bg-gray-300 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black"></div></label></div>
-            {settings.pixelationEnabled && <div><div className="flex justify-between text-xs text-gray-600 mb-1"><span>Size</span><span>{settings.pixelSize}</span></div><input type="range" min="2" max="20" value={settings.pixelSize} onChange={(e) => setSettings(prev => ({ ...prev, pixelSize: parseInt(e.target.value) }))} className="w-full accent-black" /></div>}
-          </div>
-
-
         </div>
 
         <div className="flex-1 flex items-center justify-center p-8">
@@ -553,4 +436,4 @@ const MoireAudioReactive = () => {
   );
 };
 
-export default MoireAudioReactive;
+export default Bruno;
