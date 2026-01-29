@@ -299,8 +299,7 @@ const AudioPatternGenerator = () => {
       ctx.restore(); // Close scatter rotation
     }
 
-    ctx.restore();
-
+    // Grid overlay
     if (settings.showGrid) {
       const gridSpacing = Math.min(w, h) / settings.gridSize;
       ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
