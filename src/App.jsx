@@ -105,10 +105,10 @@ const AudioPatternGenerator = () => {
           const y = (j - repetition/2) * spacing + h/2;
           
           // Duplicator transforms based on index
-          const indexScale = 1 + (settings.scalePerIndex * normalizedIndex);
-          const indexRotation = settings.rotationPerIndex * normalizedIndex * (Math.PI / 180);
-          const indexOffsetX = settings.offsetXPerIndex * normalizedIndex;
-          const indexOffsetY = settings.offsetYPerIndex * normalizedIndex;
+          const indexScale = 1 + ((settings.scalePerIndex || 0) * normalizedIndex);
+          const indexRotation = (settings.rotationPerIndex || 0) * normalizedIndex * (Math.PI / 180);
+          const indexOffsetX = (settings.offsetXPerIndex || 0) * normalizedIndex;
+          const indexOffsetY = (settings.offsetYPerIndex || 0) * normalizedIndex;
           
           // Audio reactivity per element
           const audioScale = settings.audioReactiveScale 
