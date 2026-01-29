@@ -170,54 +170,47 @@ const AudioPatternGenerator = () => {
           const x = centerX + radius * Math.cos(angle);
           const y = centerY + radius * Math.sin(angle);
           
-          // Each element reacts based on its position
-          const phaseOffset = ring + i;
-          const audioReact = Math.sin(timeOffset * 3 + phaseOffset) * audio.level;
-          const freqReact = Math.sin(timeOffset * 5 + phaseOffset) * audio.freq;
-          const scale = 1 + audioReact * 0.5 + freqReact * 0.3;
+          const index = ring * repetition + i;
+          const audioScale = settings.audioReactiveScale 
+            ? 1 + audio.level * Math.sin(timeOffset * 3 + index * 0.1) * 0.5
+            : 1;
+          
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(angle);
           
           if (selectedShape === 'dot') {
-            const size = (thickness + audio.freq * 3) * scale;
+            const size = thickness * audioScale;
             ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.arc(0, 0, size, 0, Math.PI * 2);
             ctx.fill();
           } else if (selectedShape === 'line') {
             ctx.strokeStyle = color;
-            ctx.lineWidth = thickness * scale;
-            const lineLen = elementSize * scale;
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(angle);
+            ctx.lineWidth = thickness;
+            const lineLen = elementSize * audioScale;
             ctx.beginPath();
             ctx.moveTo(-lineLen/2, 0);
             ctx.lineTo(lineLen/2, 0);
             ctx.stroke();
-            ctx.restore();
           } else if (selectedShape === 'triangle') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize * scale;
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(angle);
+            const s = elementSize * audioScale;
             ctx.beginPath();
             ctx.moveTo(0, -s/2);
             ctx.lineTo(s/2, s/2);
             ctx.lineTo(-s/2, s/2);
             ctx.closePath();
             ctx.stroke();
-            ctx.restore();
           } else if (selectedShape === 'square') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize * scale;
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(angle);
+            const s = elementSize * audioScale;
             ctx.strokeRect(-s/2, -s/2, s, s);
-            ctx.restore();
           }
+          
+          ctx.restore();
         }
       }
     } else if (settings.patternType === 'scatter') {
@@ -231,54 +224,46 @@ const AudioPatternGenerator = () => {
         const x = w/2 + radius * Math.cos(angle);
         const y = h/2 + radius * Math.sin(angle);
         
-        // Each element pulses independently
-        const phaseOffset = i * 0.1;
-        const audioReact = Math.sin(timeOffset * 3 + phaseOffset) * audio.level;
-        const freqReact = Math.sin(timeOffset * 5 + phaseOffset) * audio.freq;
-        const scale = 1 + audioReact * 0.5 + freqReact * 0.3;
+        const audioScale = settings.audioReactiveScale 
+          ? 1 + audio.level * Math.sin(timeOffset * 3 + i * 0.1) * 0.5
+          : 1;
+        
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
         
         if (selectedShape === 'dot') {
-          const size = (thickness + audio.freq * 3) * scale;
+          const size = thickness * audioScale;
           ctx.fillStyle = color;
           ctx.beginPath();
-          ctx.arc(x, y, size, 0, Math.PI * 2);
+          ctx.arc(0, 0, size, 0, Math.PI * 2);
           ctx.fill();
         } else if (selectedShape === 'line') {
           ctx.strokeStyle = color;
-          ctx.lineWidth = thickness * scale;
-          const lineLen = elementSize * scale;
-          ctx.save();
-          ctx.translate(x, y);
-          ctx.rotate(angle);
+          ctx.lineWidth = thickness;
+          const lineLen = elementSize * audioScale;
           ctx.beginPath();
           ctx.moveTo(-lineLen/2, 0);
           ctx.lineTo(lineLen/2, 0);
           ctx.stroke();
-          ctx.restore();
         } else if (selectedShape === 'triangle') {
           ctx.strokeStyle = color;
           ctx.lineWidth = thickness;
-          const s = elementSize * scale;
-          ctx.save();
-          ctx.translate(x, y);
-          ctx.rotate(angle);
+          const s = elementSize * audioScale;
           ctx.beginPath();
           ctx.moveTo(0, -s/2);
           ctx.lineTo(s/2, s/2);
           ctx.lineTo(-s/2, s/2);
           ctx.closePath();
           ctx.stroke();
-          ctx.restore();
         } else if (selectedShape === 'square') {
           ctx.strokeStyle = color;
           ctx.lineWidth = thickness;
-          const s = elementSize * scale;
-          ctx.save();
-          ctx.translate(x, y);
-          ctx.rotate(angle);
+          const s = elementSize * audioScale;
           ctx.strokeRect(-s/2, -s/2, s, s);
-          ctx.restore();
         }
+        
+        ctx.restore();
       }
     }
 
