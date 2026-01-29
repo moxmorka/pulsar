@@ -94,13 +94,13 @@ const AudioPatternGenerator = () => {
     ctx.translate(-w / 2, -h / 2);
 
     if (settings.patternType === 'grid') {
-      // Grid duplicator - each element pulses independently
+      // Grid duplicator - each element pulses completely independently
       for (let i = 0; i < repetition; i++) {
         for (let j = 0; j < repetition; j++) {
           const index = i * repetition + j;
           const normalizedIndex = index / (repetition * repetition);
           
-          // Base position in grid
+          // Base position in grid - FIXED, doesn't move
           const x = (i - repetition/2) * spacing + w/2;
           const y = (j - repetition/2) * spacing + h/2;
           
@@ -110,21 +110,20 @@ const AudioPatternGenerator = () => {
           const indexOffsetX = (settings.offsetXPerIndex || 0) * normalizedIndex;
           const indexOffsetY = (settings.offsetYPerIndex || 0) * normalizedIndex;
           
-          // Each element pulses independently based on position
-          const phaseX = i * 0.5;
-          const phaseY = j * 0.5;
-          const wavePulse = Math.sin(timeOffset * 3 + phaseX + phaseY) * audio.level;
+          // Each element's unique phase based on position
+          const phaseOffset = i * 0.8 + j * 0.6;
+          
+          // Independent pulse - only uses phase, not global audio
+          const elementPulse = Math.sin(timeOffset * 4 + phaseOffset);
+          
+          // Audio modulates the pulse wave intensity
           const audioScale = settings.audioReactiveScale 
-            ? 1 + wavePulse * 0.8
+            ? 1 + elementPulse * audio.level * 0.5
             : 1;
           
-          // Independent movement per element
-          const waveOffsetX = Math.sin(timeOffset * 2 + i * 0.3) * distortion * audio.level * 0.3;
-          const waveOffsetY = Math.cos(timeOffset * 2 + j * 0.3) * distortion * audio.level * 0.3;
-          
           const finalScale = indexScale * audioScale;
-          const finalX = x + indexOffsetX + waveOffsetX;
-          const finalY = y + indexOffsetY + waveOffsetY;
+          const finalX = x + indexOffsetX;
+          const finalY = y + indexOffsetY;
           
           ctx.save();
           ctx.translate(finalX, finalY);
@@ -138,7 +137,7 @@ const AudioPatternGenerator = () => {
             ctx.fill();
           } else if (selectedShape === 'line') {
             ctx.strokeStyle = color;
-            ctx.lineWidth = thickness * audioScale;
+            ctx.lineWidth = thickness;
             const lineLen = elementSize * finalScale;
             ctx.beginPath();
             ctx.moveTo(-lineLen/2, 0);
@@ -146,7 +145,7 @@ const AudioPatternGenerator = () => {
             ctx.stroke();
           } else if (selectedShape === 'triangle') {
             ctx.strokeStyle = color;
-            ctx.lineWidth = thickness * audioScale;
+            ctx.lineWidth = thickness;
             const s = elementSize * finalScale;
             ctx.beginPath();
             ctx.moveTo(0, -s/2);
@@ -156,7 +155,7 @@ const AudioPatternGenerator = () => {
             ctx.stroke();
           } else if (selectedShape === 'square') {
             ctx.strokeStyle = color;
-            ctx.lineWidth = thickness * audioScale;
+            ctx.lineWidth = thickness;
             const s = elementSize * finalScale;
             ctx.strokeRect(-s/2, -s/2, s, s);
           }
