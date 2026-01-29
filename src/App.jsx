@@ -86,7 +86,7 @@ const AudioPatternGenerator = () => {
       : settings.rotation * (Math.PI / 180);
     const timeOffset = Date.now() * 0.001 * settings.distortionSpeed;
     const distortion = settings.distortionStrength;
-    const elementSize = spacing * 0.5; // Each element is half the spacing
+    const elementSize = spacing * 0.4; // Each element is 40% of spacing - small!
 
     ctx.save();
     ctx.translate(w / 2, h / 2);
