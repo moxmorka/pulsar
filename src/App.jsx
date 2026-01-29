@@ -94,32 +94,39 @@ const AudioPatternGenerator = () => {
     ctx.translate(-w / 2, -h / 2);
 
     if (settings.patternType === 'grid') {
-      // Grid pattern - rows and columns of small elements
+      // Grid pattern - each element reacts independently to audio
       for (let i = 0; i < repetition; i++) {
         for (let j = 0; j < repetition; j++) {
           const x = (i - repetition/2) * spacing + w/2;
           const y = (j - repetition/2) * spacing + h/2;
-          const offsetX = Math.sin(timeOffset + i * 0.1) * distortion * audio.level;
-          const offsetY = Math.cos(timeOffset + j * 0.1) * distortion * audio.level;
+          
+          // Each element gets unique offset based on position and time
+          const phaseOffset = (i + j) * 0.5;
+          const audioReact = Math.sin(timeOffset * 3 + phaseOffset) * audio.level;
+          const freqReact = Math.sin(timeOffset * 5 + phaseOffset) * audio.freq;
+          const offsetX = Math.sin(timeOffset + i * 0.3) * distortion * audioReact;
+          const offsetY = Math.cos(timeOffset + j * 0.3) * distortion * audioReact;
+          const scale = 1 + audioReact * 0.5 + freqReact * 0.3;
           
           if (selectedShape === 'dot') {
-            const size = thickness + audio.freq * 3;
+            const size = (thickness + audio.freq * 3) * scale;
             ctx.fillStyle = color;
             ctx.beginPath();
             ctx.arc(x + offsetX, y + offsetY, size, 0, Math.PI * 2);
             ctx.fill();
           } else if (selectedShape === 'line') {
-            // Small line segment at each position
+            // Small line segment - each one independent
             ctx.strokeStyle = color;
-            ctx.lineWidth = thickness;
+            ctx.lineWidth = thickness * scale;
+            const lineLen = elementSize * scale;
             ctx.beginPath();
-            ctx.moveTo(x + offsetX - elementSize/2, y + offsetY);
-            ctx.lineTo(x + offsetX + elementSize/2, y + offsetY);
+            ctx.moveTo(x + offsetX - lineLen/2, y + offsetY);
+            ctx.lineTo(x + offsetX + lineLen/2, y + offsetY);
             ctx.stroke();
           } else if (selectedShape === 'triangle') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize;
+            const s = elementSize * scale;
             ctx.beginPath();
             ctx.moveTo(x + offsetX, y + offsetY - s/2);
             ctx.lineTo(x + offsetX + s/2, y + offsetY + s/2);
@@ -129,13 +136,13 @@ const AudioPatternGenerator = () => {
           } else if (selectedShape === 'square') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize;
+            const s = elementSize * scale;
             ctx.strokeRect(x + offsetX - s/2, y + offsetY - s/2, s, s);
           }
         }
       }
     } else if (settings.patternType === 'radial') {
-      // Radial pattern - concentric rings
+      // Radial pattern - each element on each ring reacts independently
       const centerX = w / 2;
       const centerY = h / 2;
       const angleStep = (Math.PI * 2) / repetition;
@@ -147,27 +154,34 @@ const AudioPatternGenerator = () => {
           const x = centerX + radius * Math.cos(angle);
           const y = centerY + radius * Math.sin(angle);
           
+          // Each element reacts based on its position
+          const phaseOffset = ring + i;
+          const audioReact = Math.sin(timeOffset * 3 + phaseOffset) * audio.level;
+          const freqReact = Math.sin(timeOffset * 5 + phaseOffset) * audio.freq;
+          const scale = 1 + audioReact * 0.5 + freqReact * 0.3;
+          
           if (selectedShape === 'dot') {
-            const size = thickness + audio.freq * 3;
+            const size = (thickness + audio.freq * 3) * scale;
             ctx.fillStyle = color;
             ctx.beginPath();
             ctx.arc(x, y, size, 0, Math.PI * 2);
             ctx.fill();
           } else if (selectedShape === 'line') {
             ctx.strokeStyle = color;
-            ctx.lineWidth = thickness;
+            ctx.lineWidth = thickness * scale;
+            const lineLen = elementSize * scale;
             ctx.save();
             ctx.translate(x, y);
             ctx.rotate(angle);
             ctx.beginPath();
-            ctx.moveTo(-elementSize/2, 0);
-            ctx.lineTo(elementSize/2, 0);
+            ctx.moveTo(-lineLen/2, 0);
+            ctx.lineTo(lineLen/2, 0);
             ctx.stroke();
             ctx.restore();
           } else if (selectedShape === 'triangle') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize;
+            const s = elementSize * scale;
             ctx.save();
             ctx.translate(x, y);
             ctx.rotate(angle);
@@ -181,7 +195,7 @@ const AudioPatternGenerator = () => {
           } else if (selectedShape === 'square') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize;
+            const s = elementSize * scale;
             ctx.save();
             ctx.translate(x, y);
             ctx.rotate(angle);
@@ -191,7 +205,7 @@ const AudioPatternGenerator = () => {
         }
       }
     } else if (settings.patternType === 'scatter') {
-      // Scatter pattern - spiral/golden angle distribution
+      // Scatter pattern - golden angle spiral, each element independent
       const goldenAngle = Math.PI * (3 - Math.sqrt(5));
       const totalElements = repetition * 8;
       
@@ -201,27 +215,34 @@ const AudioPatternGenerator = () => {
         const x = w/2 + radius * Math.cos(angle);
         const y = h/2 + radius * Math.sin(angle);
         
+        // Each element pulses independently
+        const phaseOffset = i * 0.1;
+        const audioReact = Math.sin(timeOffset * 3 + phaseOffset) * audio.level;
+        const freqReact = Math.sin(timeOffset * 5 + phaseOffset) * audio.freq;
+        const scale = 1 + audioReact * 0.5 + freqReact * 0.3;
+        
         if (selectedShape === 'dot') {
-          const size = thickness + audio.freq * 3;
+          const size = (thickness + audio.freq * 3) * scale;
           ctx.fillStyle = color;
           ctx.beginPath();
           ctx.arc(x, y, size, 0, Math.PI * 2);
           ctx.fill();
         } else if (selectedShape === 'line') {
           ctx.strokeStyle = color;
-          ctx.lineWidth = thickness;
+          ctx.lineWidth = thickness * scale;
+          const lineLen = elementSize * scale;
           ctx.save();
           ctx.translate(x, y);
           ctx.rotate(angle);
           ctx.beginPath();
-          ctx.moveTo(-elementSize/2, 0);
-          ctx.lineTo(elementSize/2, 0);
+          ctx.moveTo(-lineLen/2, 0);
+          ctx.lineTo(lineLen/2, 0);
           ctx.stroke();
           ctx.restore();
         } else if (selectedShape === 'triangle') {
           ctx.strokeStyle = color;
           ctx.lineWidth = thickness;
-          const s = elementSize;
+          const s = elementSize * scale;
           ctx.save();
           ctx.translate(x, y);
           ctx.rotate(angle);
@@ -235,7 +256,7 @@ const AudioPatternGenerator = () => {
         } else if (selectedShape === 'square') {
           ctx.strokeStyle = color;
           ctx.lineWidth = thickness;
-          const s = elementSize;
+          const s = elementSize * scale;
           ctx.save();
           ctx.translate(x, y);
           ctx.rotate(angle);
