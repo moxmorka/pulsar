@@ -94,33 +94,32 @@ const AudioPatternGenerator = () => {
     ctx.translate(-w / 2, -h / 2);
 
     if (settings.patternType === 'grid') {
-      // Grid duplicator - each element reacts to audio independently based on position
+      // Grid - each element samples DIFFERENT frequency band
       for (let i = 0; i < repetition; i++) {
         for (let j = 0; j < repetition; j++) {
           const index = i * repetition + j;
           const normalizedIndex = index / (repetition * repetition);
           
-          // Base position in grid - COMPLETELY FIXED
+          // FIXED position
           const x = (i - repetition/2) * spacing + w/2;
           const y = (j - repetition/2) * spacing + h/2;
           
-          // Duplicator transforms based on index
+          // Duplicator transforms
           const indexScale = 1 + ((settings.scalePerIndex || 0) * normalizedIndex);
           const indexRotation = (settings.rotationPerIndex || 0) * normalizedIndex * (Math.PI / 180);
           const indexOffsetX = (settings.offsetXPerIndex || 0) * normalizedIndex;
           const indexOffsetY = (settings.offsetYPerIndex || 0) * normalizedIndex;
           
-          // Each element reacts to audio independently
-          // Position determines which frequency band affects it
-          const positionPhase = (i / repetition + j / repetition) * Math.PI * 2;
-          const freqModulation = Math.sin(positionPhase);
+          // CRITICAL: Each element samples a DIFFERENT frequency band
+          const freqBandIndex = Math.floor((index / (repetition * repetition)) * (audio.spectrum?.length || 128));
+          const elementAudio = audio.spectrum?.[freqBandIndex] || 0;
           
-          // This element's response to current audio
-          const audioResponse = settings.audioReactiveScale 
-            ? audio.level * (0.5 + freqModulation * 0.5) // Each element responds differently based on position
-            : 0;
+          // This element ONLY reacts to its assigned frequency
+          const audioScale = settings.audioReactiveScale 
+            ? 1 + elementAudio * 2
+            : 1;
           
-          const finalScale = indexScale * (1 + audioResponse);
+          const finalScale = indexScale * audioScale;
           const finalX = x + indexOffsetX;
           const finalY = y + indexOffsetY;
           
@@ -163,7 +162,7 @@ const AudioPatternGenerator = () => {
         }
       }
     } else if (settings.patternType === 'radial') {
-      // Radial pattern - each element on each ring reacts independently
+      // Radial - each ring and position samples different frequency
       const centerX = w / 2;
       const centerY = h / 2;
       const angleStep = (Math.PI * 2) / repetition;
@@ -176,8 +175,12 @@ const AudioPatternGenerator = () => {
           const y = centerY + radius * Math.sin(angle);
           
           const index = ring * repetition + i;
+          const totalElements = 10 * repetition;
+          const freqBandIndex = Math.floor((index / totalElements) * (audio.spectrum?.length || 128));
+          const elementAudio = audio.spectrum?.[freqBandIndex] || 0;
+          
           const audioScale = settings.audioReactiveScale 
-            ? 1 + audio.level * Math.sin(timeOffset * 3 + index * 0.1) * 0.5
+            ? 1 + elementAudio * 2
             : 1;
           
           ctx.save();
@@ -219,7 +222,7 @@ const AudioPatternGenerator = () => {
         }
       }
     } else if (settings.patternType === 'scatter') {
-      // Scatter pattern - golden angle spiral, each element independent
+      // Scatter - spiral elements each get unique frequency
       const goldenAngle = Math.PI * (3 - Math.sqrt(5));
       const totalElements = repetition * 8;
       
@@ -229,8 +232,11 @@ const AudioPatternGenerator = () => {
         const x = w/2 + radius * Math.cos(angle);
         const y = h/2 + radius * Math.sin(angle);
         
+        const freqBandIndex = Math.floor((i / totalElements) * (audio.spectrum?.length || 128));
+        const elementAudio = audio.spectrum?.[freqBandIndex] || 0;
+        
         const audioScale = settings.audioReactiveScale 
-          ? 1 + audio.level * Math.sin(timeOffset * 3 + i * 0.1) * 0.5
+          ? 1 + elementAudio * 2
           : 1;
         
         ctx.save();
