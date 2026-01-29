@@ -108,47 +108,38 @@ const AudioPatternMorpher = () => {
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, w, h);
     
-    const numLayers = settings.layerCount;
     const spacing = settings.spacing;
     const distortion = settings.distortionStrength;
     const speed = settings.distortionSpeed;
     const color = settings.patternColor;
+    const gridSize = Math.floor(Math.min(w, h) / spacing) + 5;
+    const timeOffset = Date.now() * 0.001 * speed;
     
     if (morph < 0.33) {
-      const gridSize = Math.floor(Math.max(w, h) / spacing);
+      const offset = audio.level * distortion;
       
-      for (let layer = 0; layer < numLayers; layer++) {
-        const offset = audio.level * distortion + layer * 10;
-        const timeOffset = Date.now() * 0.001 * speed + layer * 0.5;
-        
-        for (let i = 0; i < gridSize; i++) {
-          for (let j = 0; j < gridSize; j++) {
-            const x = i * spacing + Math.sin(timeOffset + i * 0.1) * offset;
-            const y = j * spacing + Math.cos(timeOffset + j * 0.1) * offset;
-            const size = settings.lineThickness + audio.freq * 4;
-            
-            const alpha = 0.8 / numLayers;
-            ctx.fillStyle = color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
-            ctx.beginPath();
-            ctx.arc(x, y, size, 0, Math.PI * 2);
-            ctx.fill();
-          }
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const x = i * spacing + Math.sin(timeOffset + i * 0.2) * offset;
+          const y = j * spacing + Math.cos(timeOffset + j * 0.2) * offset;
+          const size = settings.lineThickness + audio.freq * 4;
+          
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(x, y, size, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
     }
     
     if (morph >= 0.33 && morph < 0.67) {
-      const rows = Math.floor(h / spacing);
-      const cols = Math.floor(w / spacing);
-      const timeOffset = Date.now() * 0.001 * speed;
-      
-      for (let i = 0; i < cols; i++) {
-        for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
           const x = i * spacing;
-          const y = j * spacing + Math.sin(i * 0.3 + timeOffset + audio.freq * 10) * distortion * audio.level;
+          const y = j * spacing + Math.sin(i * 0.5 + timeOffset) * distortion * audio.level;
           const size = settings.lineThickness + audio.level * 3;
           
-          ctx.fillStyle = color + 'b3';
+          ctx.fillStyle = color;
           ctx.beginPath();
           ctx.arc(x, y, size, 0, Math.PI * 2);
           ctx.fill();
@@ -157,19 +148,15 @@ const AudioPatternMorpher = () => {
     }
     
     if (morph >= 0.67) {
-      const gridSize = Math.floor(Math.max(w, h) / spacing);
-      const timeOffset = Date.now() * 0.001 * speed;
       const angle1 = audio.freq * Math.PI * 0.3 + timeOffset;
       
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          const baseX = i * spacing;
-          const baseY = j * spacing;
-          const x1 = baseX + Math.sin(angle1 + j * 0.1) * distortion * audio.level;
-          const y1 = baseY + Math.cos(angle1 + i * 0.1) * distortion * audio.level;
+          const x1 = i * spacing + Math.sin(angle1 + j * 0.2) * distortion * audio.level;
+          const y1 = j * spacing + Math.cos(angle1 + i * 0.2) * distortion * audio.level;
           const size = settings.lineThickness + audio.level * 4;
           
-          ctx.fillStyle = color + '99';
+          ctx.fillStyle = color;
           ctx.beginPath();
           ctx.arc(x1, y1, size, 0, Math.PI * 2);
           ctx.fill();
@@ -182,48 +169,38 @@ const AudioPatternMorpher = () => {
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, w, h);
     
-    const numLayers = settings.layerCount;
     const spacing = settings.spacing;
     const distortion = settings.distortionStrength;
     const speed = settings.distortionSpeed;
     const thickness = settings.lineThickness;
     const color = settings.patternColor;
+    const timeOffset = Date.now() * 0.001 * speed;
+    const numLines = Math.floor(Math.min(w, h) / spacing);
+    
+    ctx.strokeStyle = color;
+    ctx.lineWidth = thickness + audio.freq * 3;
     
     if (morph < 0.33) {
-      const numLines = Math.floor(h / spacing);
-      const timeOffset = Date.now() * 0.001 * speed;
       const offset = audio.level * distortion;
       
-      const alpha = 0.6 / numLayers;
-      ctx.strokeStyle = color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
-      ctx.lineWidth = thickness + audio.freq * 3;
+      for (let i = 0; i < numLines; i++) {
+        const y = i * spacing + offset + Math.sin(timeOffset + i * 0.2) * 10;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
       
-      for (let layer = 0; layer < numLayers; layer++) {
-        const layerOffset = offset + layer * 15;
-        
-        for (let i = 0; i < numLines; i++) {
-          const y = i * spacing + layerOffset + Math.sin(timeOffset + i * 0.1) * 10;
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(w, y);
-          ctx.stroke();
-        }
-        
-        for (let i = 0; i < numLines; i++) {
-          const x = i * spacing + layerOffset * 1.3 + Math.cos(timeOffset + i * 0.1) * 10;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, h);
-          ctx.stroke();
-        }
+      for (let i = 0; i < numLines; i++) {
+        const x = i * spacing + offset * 1.3 + Math.cos(timeOffset + i * 0.2) * 10;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
       }
     }
     
     if (morph >= 0.33 && morph < 0.67) {
-      const numLines = Math.floor(h / spacing);
-      const timeOffset = Date.now() * 0.001 * speed;
-      
-      ctx.strokeStyle = color + '99';
       ctx.lineWidth = thickness + audio.level * 3;
       
       for (let i = 0; i < numLines; i++) {
@@ -231,23 +208,16 @@ const AudioPatternMorpher = () => {
         ctx.beginPath();
         ctx.moveTo(0, y);
         
-        for (let x = 0; x < w; x += 5) {
-          const wave1 = Math.sin(x * 0.02 + timeOffset + audio.freq * 5) * distortion * 0.5;
-          const wave2 = Math.sin(x * 0.03 - audio.level * 3 + timeOffset) * distortion * 0.3;
-          const yOffset = y + wave1 + wave2;
-          ctx.lineTo(x, yOffset);
+        for (let x = 0; x < w; x += 10) {
+          const wave = Math.sin(x * 0.03 + timeOffset) * distortion * 0.5;
+          ctx.lineTo(x, y + wave);
         }
         ctx.stroke();
       }
     }
     
     if (morph >= 0.67) {
-      const numLines = Math.floor((w + h) / spacing);
-      const timeOffset = Date.now() * 0.001 * speed;
-      const angle1 = Math.PI / 4 + audio.freq * 0.5 + timeOffset * 0.5;
-      const angle2 = -Math.PI / 4 + audio.level * 0.5 + timeOffset * 0.3;
-      
-      ctx.strokeStyle = color + '66';
+      const angle1 = Math.PI / 4 + timeOffset * 0.5;
       ctx.lineWidth = thickness + audio.freq * 2;
       
       for (let i = 0; i < numLines; i++) {
@@ -256,13 +226,10 @@ const AudioPatternMorpher = () => {
         ctx.moveTo(offset * Math.cos(angle1), offset * Math.sin(angle1));
         ctx.lineTo(w + offset * Math.cos(angle1), h + offset * Math.sin(angle1));
         ctx.stroke();
-      }
-      
-      for (let i = 0; i < numLines; i++) {
-        const offset = i * spacing;
+        
         ctx.beginPath();
-        ctx.moveTo(offset * Math.cos(angle2), h - offset * Math.sin(angle2));
-        ctx.lineTo(w + offset * Math.cos(angle2), -offset * Math.sin(angle2));
+        ctx.moveTo(offset * Math.cos(-angle1), h - offset * Math.sin(-angle1));
+        ctx.lineTo(w + offset * Math.cos(-angle1), -offset * Math.sin(-angle1));
         ctx.stroke();
       }
     }
@@ -276,33 +243,31 @@ const AudioPatternMorpher = () => {
     const distortion = settings.distortionStrength;
     const speed = settings.distortionSpeed;
     const thickness = settings.lineThickness;
+    const color = settings.patternColor;
+    const timeOffset = Date.now() * 0.001 * speed;
+    const gridSize = Math.floor(Math.min(w, h) / spacing);
+    
+    ctx.strokeStyle = color;
+    ctx.lineWidth = thickness + audio.freq * 2;
     
     if (morph < 0.33) {
-      const rows = Math.floor(h / spacing);
-      const cols = Math.floor(w / spacing);
-      const timeOffset = Date.now() * 0.001 * speed;
       const offset = audio.level * distortion;
       
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.6)`;
-      ctx.lineWidth = thickness + audio.freq * 2;
-      
-      for (let i = 0; i < rows; i++) {
-        for (let j = 0; j < cols; j++) {
-          const x = j * spacing + offset + Math.sin(timeOffset + i * 0.1) * 10;
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const x = j * spacing + offset;
           const y = i * spacing;
-          const cellW = spacing;
-          const cellH = spacing;
           const flip = (i + j) % 2 === 0;
           
           ctx.beginPath();
           if (flip) {
             ctx.moveTo(x, y);
-            ctx.lineTo(x + cellW, y);
-            ctx.lineTo(x + cellW/2, y + cellH);
+            ctx.lineTo(x + spacing, y);
+            ctx.lineTo(x + spacing/2, y + spacing);
           } else {
-            ctx.moveTo(x, y + cellH);
-            ctx.lineTo(x + cellW, y + cellH);
-            ctx.lineTo(x + cellW/2, y);
+            ctx.moveTo(x, y + spacing);
+            ctx.lineTo(x + spacing, y + spacing);
+            ctx.lineTo(x + spacing/2, y);
           }
           ctx.closePath();
           ctx.stroke();
@@ -311,38 +276,17 @@ const AudioPatternMorpher = () => {
     }
     
     if (morph >= 0.33 && morph < 0.67) {
-      const gridSize = Math.floor(Math.min(w, h) / spacing);
-      const size = spacing;
-      const timeOffset = Date.now() * 0.001 * speed;
-      const offset1 = audio.level * distortion + Math.sin(timeOffset) * 10;
-      const offset2 = audio.freq * distortion + Math.cos(timeOffset) * 10;
-      
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.5)`;
-      ctx.lineWidth = thickness + audio.level * 2;
+      const offset1 = audio.level * distortion;
       
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          const x = j * size + offset1;
-          const y = i * size;
+          const x = j * spacing + offset1;
+          const y = i * spacing;
           
           ctx.beginPath();
-          ctx.moveTo(x + size/2, y);
-          ctx.lineTo(x + size, y + size);
-          ctx.lineTo(x, y + size);
-          ctx.closePath();
-          ctx.stroke();
-        }
-      }
-      
-      for (let i = 0; i < gridSize; i++) {
-        for (let j = 0; j < gridSize; j++) {
-          const x = j * size;
-          const y = i * size + offset2;
-          
-          ctx.beginPath();
-          ctx.moveTo(x + size/2, y);
-          ctx.lineTo(x + size, y + size);
-          ctx.lineTo(x, y + size);
+          ctx.moveTo(x + spacing/2, y);
+          ctx.lineTo(x + spacing, y + spacing);
+          ctx.lineTo(x, y + spacing);
           ctx.closePath();
           ctx.stroke();
         }
@@ -350,28 +294,21 @@ const AudioPatternMorpher = () => {
     }
     
     if (morph >= 0.67) {
-      const gridSize = Math.floor(Math.max(w, h) / spacing);
-      const timeOffset = Date.now() * 0.001 * speed;
       const rotation = audio.freq * Math.PI * 0.2 + timeOffset * 0.5;
       
       ctx.save();
       ctx.translate(w/2, h/2);
       ctx.rotate(rotation);
-      ctx.translate(-w/2, -h/2);
       
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.4)`;
-      ctx.lineWidth = thickness + audio.level * 2;
-      
-      for (let i = -gridSize; i < gridSize * 2; i++) {
-        for (let j = -gridSize; j < gridSize * 2; j++) {
-          const x = j * spacing;
-          const y = i * spacing;
-          const size = spacing * 0.9;
+      for (let i = -gridSize; i < gridSize; i++) {
+        for (let j = -gridSize; j < gridSize; j++) {
+          const x = j * spacing - w/2;
+          const y = i * spacing - h/2;
           
           ctx.beginPath();
-          ctx.moveTo(x + size/2, y);
-          ctx.lineTo(x + size, y + size);
-          ctx.lineTo(x, y + size);
+          ctx.moveTo(x + spacing/2, y);
+          ctx.lineTo(x + spacing, y + spacing);
+          ctx.lineTo(x, y + spacing);
           ctx.closePath();
           ctx.stroke();
         }
@@ -389,85 +326,56 @@ const AudioPatternMorpher = () => {
     const distortion = settings.distortionStrength;
     const speed = settings.distortionSpeed;
     const thickness = settings.lineThickness;
+    const color = settings.patternColor;
+    const timeOffset = Date.now() * 0.001 * speed;
+    const gridSize = Math.floor(Math.min(w, h) / spacing);
+    
+    ctx.strokeStyle = color;
+    ctx.lineWidth = thickness + audio.freq * 2;
     
     if (morph < 0.33) {
-      const gridSize = Math.floor(Math.min(w, h) / spacing);
-      const cellSize = spacing;
-      const timeOffset = Date.now() * 0.001 * speed;
-      const offset = audio.level * distortion + Math.sin(timeOffset) * 15;
-      
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.5)`;
-      ctx.lineWidth = thickness + audio.freq * 2;
+      const offset = audio.level * distortion;
       
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          const x = i * cellSize + offset;
-          const y = j * cellSize;
-          ctx.strokeRect(x, y, cellSize * 0.8, cellSize * 0.8);
+          ctx.strokeRect(i * spacing + offset, j * spacing, spacing * 0.8, spacing * 0.8);
         }
       }
       
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          const x = i * cellSize;
-          const y = j * cellSize + offset * 1.2;
-          ctx.strokeRect(x, y, cellSize * 0.8, cellSize * 0.8);
+          ctx.strokeRect(i * spacing, j * spacing + offset * 1.2, spacing * 0.8, spacing * 0.8);
         }
       }
     }
     
     if (morph >= 0.33 && morph < 0.67) {
-      const gridSize = Math.floor(Math.min(w, h) / spacing);
-      const cellSize = spacing;
-      const timeOffset = Date.now() * 0.001 * speed;
       const rotation = audio.freq * Math.PI * 0.15 + timeOffset * 0.3;
       
       ctx.save();
       ctx.translate(w/2, h/2);
       ctx.rotate(rotation);
-      ctx.translate(-w/2, -h/2);
       
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.4)`;
-      ctx.lineWidth = thickness + audio.level * 2;
-      
-      for (let i = -gridSize; i < gridSize * 2; i++) {
-        for (let j = -gridSize; j < gridSize * 2; j++) {
-          const x = i * cellSize;
-          const y = j * cellSize;
-          ctx.strokeRect(x, y, cellSize * 0.9, cellSize * 0.9);
+      for (let i = -gridSize; i < gridSize; i++) {
+        for (let j = -gridSize; j < gridSize; j++) {
+          ctx.strokeRect(i * spacing - w/2, j * spacing - h/2, spacing * 0.9, spacing * 0.9);
         }
       }
       
       ctx.restore();
       
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.3)`;
-      ctx.lineWidth = thickness + audio.level * 2;
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          const x = i * cellSize;
-          const y = j * cellSize;
-          ctx.strokeRect(x, y, cellSize * 0.9, cellSize * 0.9);
+          ctx.strokeRect(i * spacing, j * spacing, spacing * 0.9, spacing * 0.9);
         }
       }
     }
     
     if (morph >= 0.67) {
-      const rows = Math.floor(h / spacing);
-      const cols = Math.floor(w / spacing);
-      const cellW = spacing;
-      const cellH = spacing;
-      const timeOffset = Date.now() * 0.001 * speed;
-      
-      ctx.strokeStyle = `rgba(0, 0, 0, 0.6)`;
-      ctx.lineWidth = thickness + audio.freq * 2;
-      
-      for (let i = 0; i < rows; i++) {
-        for (let j = 0; j < cols; j++) {
-          const x = j * cellW;
-          const y = i * cellH + Math.sin(j * 0.5 + timeOffset + audio.level * 5) * distortion * 0.5;
-          const size = cellW * 0.7;
-          
-          ctx.strokeRect(x, y, size, size);
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const y = i * spacing + Math.sin(j * 0.5 + timeOffset) * distortion * 0.5;
+          ctx.strokeRect(j * spacing, y, spacing * 0.7, spacing * 0.7);
         }
       }
     }
