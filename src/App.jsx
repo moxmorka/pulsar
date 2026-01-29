@@ -86,6 +86,7 @@ const AudioPatternGenerator = () => {
       : settings.rotation * (Math.PI / 180);
     const timeOffset = Date.now() * 0.001 * settings.distortionSpeed;
     const distortion = settings.distortionStrength;
+    const elementSize = spacing * 0.5; // Each element is half the spacing
 
     ctx.save();
     ctx.translate(w / 2, h / 2);
@@ -93,105 +94,134 @@ const AudioPatternGenerator = () => {
     ctx.translate(-w / 2, -h / 2);
 
     if (settings.patternType === 'grid') {
-      if (selectedShape === 'dot') {
-        ctx.fillStyle = color;
-        for (let i = 0; i < repetition; i++) {
-          for (let j = 0; j < repetition; j++) {
-            const x = (i - repetition/2) * spacing + w/2;
-            const y = (j - repetition/2) * spacing + h/2;
-            const offset = Math.sin(timeOffset + i * 0.1) * distortion * audio.level;
-            const size = thickness + audio.freq * 5;
-            ctx.beginPath();
-            ctx.arc(x + offset, y + offset, size, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-      } else if (selectedShape === 'line') {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        for (let i = 0; i < repetition; i++) {
-          const y = (i - repetition/2) * spacing + h/2;
-          const offset = Math.sin(timeOffset + i * 0.2) * distortion * audio.level;
-          ctx.beginPath();
-          ctx.moveTo(0, y + offset);
-          ctx.lineTo(w, y + offset);
-          ctx.stroke();
-        }
-        for (let i = 0; i < repetition; i++) {
+      // Grid pattern - rows and columns of small elements
+      for (let i = 0; i < repetition; i++) {
+        for (let j = 0; j < repetition; j++) {
           const x = (i - repetition/2) * spacing + w/2;
-          const offset = Math.cos(timeOffset + i * 0.2) * distortion * audio.level;
-          ctx.beginPath();
-          ctx.moveTo(x + offset, 0);
-          ctx.lineTo(x + offset, h);
-          ctx.stroke();
-        }
-      } else if (selectedShape === 'triangle') {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        for (let i = 0; i < repetition; i++) {
-          for (let j = 0; j < repetition; j++) {
-            const x = (i - repetition/2) * spacing + w/2;
-            const y = (j - repetition/2) * spacing + h/2;
-            const s = spacing * 0.6;
+          const y = (j - repetition/2) * spacing + h/2;
+          const offsetX = Math.sin(timeOffset + i * 0.1) * distortion * audio.level;
+          const offsetY = Math.cos(timeOffset + j * 0.1) * distortion * audio.level;
+          
+          if (selectedShape === 'dot') {
+            const size = thickness + audio.freq * 3;
+            ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.moveTo(x, y - s/2);
-            ctx.lineTo(x + s/2, y + s/2);
-            ctx.lineTo(x - s/2, y + s/2);
+            ctx.arc(x + offsetX, y + offsetY, size, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (selectedShape === 'line') {
+            // Small line segment at each position
+            ctx.strokeStyle = color;
+            ctx.lineWidth = thickness;
+            ctx.beginPath();
+            ctx.moveTo(x + offsetX - elementSize/2, y + offsetY);
+            ctx.lineTo(x + offsetX + elementSize/2, y + offsetY);
+            ctx.stroke();
+          } else if (selectedShape === 'triangle') {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = thickness;
+            const s = elementSize;
+            ctx.beginPath();
+            ctx.moveTo(x + offsetX, y + offsetY - s/2);
+            ctx.lineTo(x + offsetX + s/2, y + offsetY + s/2);
+            ctx.lineTo(x + offsetX - s/2, y + offsetY + s/2);
             ctx.closePath();
             ctx.stroke();
-          }
-        }
-      } else if (selectedShape === 'square') {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        for (let i = 0; i < repetition; i++) {
-          for (let j = 0; j < repetition; j++) {
-            const x = (i - repetition/2) * spacing + w/2;
-            const y = (j - repetition/2) * spacing + h/2;
-            const s = spacing * 0.6;
-            ctx.strokeRect(x - s/2, y - s/2, s, s);
+          } else if (selectedShape === 'square') {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = thickness;
+            const s = elementSize;
+            ctx.strokeRect(x + offsetX - s/2, y + offsetY - s/2, s, s);
           }
         }
       }
     } else if (settings.patternType === 'radial') {
+      // Radial pattern - concentric rings
       const centerX = w / 2;
       const centerY = h / 2;
       const angleStep = (Math.PI * 2) / repetition;
       
-      if (selectedShape === 'dot') {
-        ctx.fillStyle = color;
-        for (let ring = 1; ring <= 10; ring++) {
-          const radius = ring * spacing;
-          for (let i = 0; i < repetition; i++) {
-            const angle = i * angleStep + timeOffset;
-            const x = centerX + radius * Math.cos(angle);
-            const y = centerY + radius * Math.sin(angle);
-            const size = thickness + audio.freq * 5;
+      for (let ring = 1; ring <= 10; ring++) {
+        const radius = ring * spacing;
+        for (let i = 0; i < repetition; i++) {
+          const angle = i * angleStep + timeOffset * 0.5;
+          const x = centerX + radius * Math.cos(angle);
+          const y = centerY + radius * Math.sin(angle);
+          
+          if (selectedShape === 'dot') {
+            const size = thickness + audio.freq * 3;
+            ctx.fillStyle = color;
             ctx.beginPath();
             ctx.arc(x, y, size, 0, Math.PI * 2);
             ctx.fill();
+          } else if (selectedShape === 'line') {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = thickness;
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle);
+            ctx.beginPath();
+            ctx.moveTo(-elementSize/2, 0);
+            ctx.lineTo(elementSize/2, 0);
+            ctx.stroke();
+            ctx.restore();
+          } else if (selectedShape === 'triangle') {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = thickness;
+            const s = elementSize;
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle);
+            ctx.beginPath();
+            ctx.moveTo(0, -s/2);
+            ctx.lineTo(s/2, s/2);
+            ctx.lineTo(-s/2, s/2);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.restore();
+          } else if (selectedShape === 'square') {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = thickness;
+            const s = elementSize;
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle);
+            ctx.strokeRect(-s/2, -s/2, s, s);
+            ctx.restore();
           }
         }
-      } else if (selectedShape === 'line') {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        for (let i = 0; i < repetition; i++) {
-          const angle = i * angleStep;
-          const length = Math.min(w, h) * 0.4 * (1 + audio.level * 0.3);
+      }
+    } else if (settings.patternType === 'scatter') {
+      // Scatter pattern - spiral/golden angle distribution
+      const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+      const totalElements = repetition * 8;
+      
+      for (let i = 0; i < totalElements; i++) {
+        const angle = i * goldenAngle + timeOffset * 0.3;
+        const radius = Math.sqrt(i) * spacing * 0.8;
+        const x = w/2 + radius * Math.cos(angle);
+        const y = h/2 + radius * Math.sin(angle);
+        
+        if (selectedShape === 'dot') {
+          const size = thickness + audio.freq * 3;
+          ctx.fillStyle = color;
           ctx.beginPath();
-          ctx.moveTo(centerX, centerY);
-          ctx.lineTo(centerX + length * Math.cos(angle), centerY + length * Math.sin(angle));
+          ctx.arc(x, y, size, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (selectedShape === 'line') {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = thickness;
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(angle);
+          ctx.beginPath();
+          ctx.moveTo(-elementSize/2, 0);
+          ctx.lineTo(elementSize/2, 0);
           ctx.stroke();
-        }
-      } else if (selectedShape === 'triangle') {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        for (let i = 0; i < repetition; i++) {
-          const angle = i * angleStep;
-          const radius = spacing * 3;
-          const x = centerX + radius * Math.cos(angle);
-          const y = centerY + radius * Math.sin(angle);
-          const s = spacing * 0.5;
+          ctx.restore();
+        } else if (selectedShape === 'triangle') {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = thickness;
+          const s = elementSize;
           ctx.save();
           ctx.translate(x, y);
           ctx.rotate(angle);
@@ -202,49 +232,15 @@ const AudioPatternGenerator = () => {
           ctx.closePath();
           ctx.stroke();
           ctx.restore();
-        }
-      } else if (selectedShape === 'square') {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        for (let i = 0; i < repetition; i++) {
-          const angle = i * angleStep;
-          const radius = spacing * 3;
-          const x = centerX + radius * Math.cos(angle);
-          const y = centerY + radius * Math.sin(angle);
-          const s = spacing * 0.5;
+        } else if (selectedShape === 'square') {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = thickness;
+          const s = elementSize;
           ctx.save();
           ctx.translate(x, y);
           ctx.rotate(angle);
           ctx.strokeRect(-s/2, -s/2, s, s);
           ctx.restore();
-        }
-      }
-    } else if (settings.patternType === 'scatter') {
-      if (selectedShape === 'dot') {
-        ctx.fillStyle = color;
-        for (let i = 0; i < repetition * 5; i++) {
-          const angle = (i / repetition) * Math.PI * 2;
-          const radius = (i % 10) * spacing;
-          const x = w/2 + radius * Math.cos(angle) + Math.sin(timeOffset + i) * distortion;
-          const y = h/2 + radius * Math.sin(angle) + Math.cos(timeOffset + i) * distortion;
-          const size = thickness + audio.freq * 5;
-          ctx.beginPath();
-          ctx.arc(x, y, size, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      } else if (selectedShape === 'line') {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        for (let i = 0; i < repetition; i++) {
-          const angle = (i / repetition) * Math.PI * 2;
-          const x1 = w/2 + Math.cos(angle) * 100;
-          const y1 = h/2 + Math.sin(angle) * 100;
-          const x2 = w/2 + Math.cos(angle + timeOffset) * 300;
-          const y2 = h/2 + Math.sin(angle + timeOffset) * 300;
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.stroke();
         }
       }
     }
