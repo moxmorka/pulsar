@@ -94,51 +94,67 @@ const AudioPatternGenerator = () => {
     ctx.translate(-w / 2, -h / 2);
 
     if (settings.patternType === 'grid') {
-      // Grid pattern - each element reacts independently to audio
+      // Grid duplicator - Cavalry style: each element transforms based on index
       for (let i = 0; i < repetition; i++) {
         for (let j = 0; j < repetition; j++) {
+          const index = i * repetition + j; // Linear index for duplicator
+          const normalizedIndex = index / (repetition * repetition); // 0 to 1
+          
+          // Base position in grid
           const x = (i - repetition/2) * spacing + w/2;
           const y = (j - repetition/2) * spacing + h/2;
           
-          // Each element gets unique offset based on position and time
-          const phaseOffset = (i + j) * 0.5;
-          const audioReact = Math.sin(timeOffset * 3 + phaseOffset) * audio.level;
-          const freqReact = Math.sin(timeOffset * 5 + phaseOffset) * audio.freq;
-          const offsetX = Math.sin(timeOffset + i * 0.3) * distortion * audioReact;
-          const offsetY = Math.cos(timeOffset + j * 0.3) * distortion * audioReact;
-          const scale = 1 + audioReact * 0.5 + freqReact * 0.3;
+          // Duplicator transforms based on index
+          const indexScale = 1 + (settings.scalePerIndex * normalizedIndex);
+          const indexRotation = settings.rotationPerIndex * normalizedIndex * (Math.PI / 180);
+          const indexOffsetX = settings.offsetXPerIndex * normalizedIndex;
+          const indexOffsetY = settings.offsetYPerIndex * normalizedIndex;
+          
+          // Audio reactivity per element
+          const audioScale = settings.audioReactiveScale 
+            ? 1 + audio.level * Math.sin(timeOffset * 3 + index * 0.1) * 0.5
+            : 1;
+          
+          const finalScale = indexScale * audioScale;
+          const finalX = x + indexOffsetX;
+          const finalY = y + indexOffsetY;
+          
+          ctx.save();
+          ctx.translate(finalX, finalY);
+          ctx.rotate(indexRotation);
           
           if (selectedShape === 'dot') {
-            const size = (thickness + audio.freq * 3) * scale;
+            const size = thickness * finalScale;
             ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.arc(x + offsetX, y + offsetY, size, 0, Math.PI * 2);
+            ctx.arc(0, 0, size, 0, Math.PI * 2);
             ctx.fill();
           } else if (selectedShape === 'line') {
-            // Small line segment - each one independent
             ctx.strokeStyle = color;
-            ctx.lineWidth = thickness * scale;
-            const lineLen = elementSize * scale;
+            ctx.lineWidth = thickness;
+            const lineLen = elementSize * finalScale;
             ctx.beginPath();
-            ctx.moveTo(x + offsetX - lineLen/2, y + offsetY);
-            ctx.lineTo(x + offsetX + lineLen/2, y + offsetY);
+            ctx.moveTo(-lineLen/2, 0);
+            ctx.lineTo(lineLen/2, 0);
             ctx.stroke();
           } else if (selectedShape === 'triangle') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize * scale;
+            const s = elementSize * finalScale;
             ctx.beginPath();
-            ctx.moveTo(x + offsetX, y + offsetY - s/2);
-            ctx.lineTo(x + offsetX + s/2, y + offsetY + s/2);
-            ctx.lineTo(x + offsetX - s/2, y + offsetY + s/2);
+            ctx.moveTo(0, -s/2);
+            ctx.lineTo(s/2, s/2);
+            ctx.lineTo(-s/2, s/2);
             ctx.closePath();
             ctx.stroke();
           } else if (selectedShape === 'square') {
             ctx.strokeStyle = color;
             ctx.lineWidth = thickness;
-            const s = elementSize * scale;
-            ctx.strokeRect(x + offsetX - s/2, y + offsetY - s/2, s, s);
+            const s = elementSize * finalScale;
+            ctx.strokeRect(-s/2, -s/2, s, s);
           }
+          
+          ctx.restore();
         }
       }
     } else if (settings.patternType === 'radial') {
@@ -365,6 +381,71 @@ const AudioPatternGenerator = () => {
           </div>
           
           <div className="space-y-3 pt-4 border-t border-gray-200">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Duplicator</label>
+            
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-gray-600">Scale/Index</span>
+                <span className="text-xs text-gray-900 font-mono">{(settings.scalePerIndex || 0).toFixed(2)}</span>
+              </div>
+              <input
+                type="range"
+                min="-2"
+                max="2"
+                step="0.01"
+                value={settings.scalePerIndex || 0}
+                onChange={(e) => setSettings(prev => ({...prev, scalePerIndex: parseFloat(e.target.value)}))}
+                className="w-full h-1 bg-gray-200 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-gray-600">Rotate/Index</span>
+                <span className="text-xs text-gray-900 font-mono">{settings.rotationPerIndex || 0}°</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="360"
+                value={settings.rotationPerIndex || 0}
+                onChange={(e) => setSettings(prev => ({...prev, rotationPerIndex: parseInt(e.target.value)}))}
+                className="w-full h-1 bg-gray-200 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-gray-600">Offset X/Index</span>
+                <span className="text-xs text-gray-900 font-mono">{settings.offsetXPerIndex || 0}</span>
+              </div>
+              <input
+                type="range"
+                min="-200"
+                max="200"
+                value={settings.offsetXPerIndex || 0}
+                onChange={(e) => setSettings(prev => ({...prev, offsetXPerIndex: parseInt(e.target.value)}))}
+                className="w-full h-1 bg-gray-200 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-gray-600">Offset Y/Index</span>
+                <span className="text-xs text-gray-900 font-mono">{settings.offsetYPerIndex || 0}</span>
+              </div>
+              <input
+                type="range"
+                min="-200"
+                max="200"
+                value={settings.offsetYPerIndex || 0}
+                onChange={(e) => setSettings(prev => ({...prev, offsetYPerIndex: parseInt(e.target.value)}))}
+                className="w-full h-1 bg-gray-200 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-3 pt-4 border-t border-gray-200">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Controls</label>
             
             <div>
@@ -462,6 +543,16 @@ const AudioPatternGenerator = () => {
           <div className="space-y-3 pt-4 border-t border-gray-200">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Audio Reactivity</label>
             
+            <label className="flex items-center justify-between">
+              <span className="text-xs text-gray-600">Scale Pulse</span>
+              <input
+                type="checkbox"
+                checked={settings.audioReactiveScale}
+                onChange={(e) => setSettings(prev => ({...prev, audioReactiveScale: e.target.checked}))}
+                className="w-4 h-4 rounded"
+              />
+            </label>
+
             <label className="flex items-center justify-between">
               <span className="text-xs text-gray-600">Repetition</span>
               <input
