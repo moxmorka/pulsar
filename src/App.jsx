@@ -1,227 +1,409 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Play, Pause } from "lucide-react";
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Pause, RotateCcw, Download } from 'lucide-react';
 
-const PixelMoireGenerator = () => {
+const AudioReactiveMoire = () => {
   const canvasRef = useRef(null);
-  const rafRef = useRef(null);
-
-  // =========================
-  // STATE
-  // =========================
-  const [isAnimating, setIsAnimating] = useState(true);
+  const [isAnimating, setIsAnimating] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
-
-  // =========================
-  // AUDIO
-  // =========================
-  const audioCtxRef = useRef(null);
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState(null);
+  const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
-  const streamRef = useRef(null);
-  const audioRAFRef = useRef(null);
-
-  const audioFrame = useRef({
-    bass: 0,
-    mid: 0,
-    high: 0,
-    level: 0,
-    fft: new Uint8Array(0),
-    phase: 0,
+  const audioDataRef = useRef(null);
+  const animationRef = useRef(null);
+  
+  const [audioLevels, setAudioLevels] = useState({ bass: 0, mid: 0, high: 0, overall: 0 });
+  
+  const [settings, setSettings] = useState({
+    patternType: 'vertical',
+    lineThickness: 2,
+    spacing: 20,
+    distortionEnabled: true,
+    distortionStrength: 15,
+    wiggleBass: true,
+    wiggleMid: true,
+    wiggleHigh: true,
+    wiggleAmount: 20,
+    wiggleFrequency: 3,
+    audioSensitivity: 2.5
   });
 
-  // =========================
-  // SETTINGS (keeps your vibe)
-  // =========================
-  const settings = useRef({
-    spacing: 18,
-    thickness: 1.5,
-    distortionStrength: 20,
+  useEffect(() => {
+    const getDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices.filter(d => d.kind === 'audioinput');
+        setAudioDevices(inputs);
+        if (inputs.length > 0) setSelectedDevice(inputs[0].deviceId);
+      } catch (err) {
+        console.error('Device enumeration failed:', err);
+      }
+    };
+    getDevices();
+  }, []);
 
-    audioAmount: 60,
-    interferenceRatio: 1.037,
-  });
-
-  // =========================
-  // AUDIO INIT
-  // =========================
   useEffect(() => {
     if (!audioEnabled) {
-      if (audioRAFRef.current) cancelAnimationFrame(audioRAFRef.current);
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-      if (audioCtxRef.current) audioCtxRef.current.close();
+      if (audioContextRef.current) audioContextRef.current.close();
+      audioDataRef.current = null;
       return;
     }
 
-    const init = async () => {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      await ctx.resume();
-
-      const src = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 4096;
-      analyser.smoothingTimeConstant = 0.15;
-
-      src.connect(analyser);
-
-      audioCtxRef.current = ctx;
-      analyserRef.current = analyser;
-
-      const update = () => {
-        const a = analyserRef.current;
-        if (!a) return;
-
-        const f = audioFrame.current;
-        const bins = a.frequencyBinCount;
-        if (f.fft.length !== bins) f.fft = new Uint8Array(bins);
-        a.getByteFrequencyData(f.fft);
-
-        const avg = (s, e) => {
-          let sum = 0;
-          for (let i = s; i < e; i++) sum += f.fft[i];
-          return sum / (e - s) / 255;
+    const initAudio = async () => {
+      try {
+        if (audioContextRef.current) await audioContextRef.current.close();
+        
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: selectedDevice ? { exact: selectedDevice } : undefined,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+        
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioContextRef.current = audioContext;
+        
+        const source = audioContext.createMediaStreamSource(stream);
+        const gain = audioContext.createGain();
+        gain.gain.value = 3.0;
+        
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 4096;
+        analyser.smoothingTimeConstant = 0.2;
+        analyserRef.current = analyser;
+        
+        source.connect(gain);
+        gain.connect(analyser);
+        
+        const updateAudio = () => {
+          if (!audioEnabled || !analyserRef.current) return;
+          
+          const bufferLength = analyserRef.current.frequencyBinCount;
+          const dataArray = new Uint8Array(bufferLength);
+          analyserRef.current.getByteFrequencyData(dataArray);
+          audioDataRef.current = dataArray;
+          
+          const bass = dataArray.slice(0, Math.floor(bufferLength * 0.1));
+          const mid = dataArray.slice(Math.floor(bufferLength * 0.1), Math.floor(bufferLength * 0.4));
+          const high = dataArray.slice(Math.floor(bufferLength * 0.4), bufferLength);
+          
+          const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length / 255;
+          
+          setAudioLevels({
+            bass: avg(bass),
+            mid: avg(mid),
+            high: avg(high),
+            overall: avg(dataArray)
+          });
+          
+          requestAnimationFrame(updateAudio);
         };
-
-        const bass = avg(0, bins * 0.1);
-        const mid = avg(bins * 0.1, bins * 0.45);
-        const high = avg(bins * 0.45, bins * 0.9);
-        const level = (bass + mid + high) / 3;
-
-        const smooth = 0.18;
-        f.bass += (bass - f.bass) * smooth;
-        f.mid += (mid - f.mid) * smooth;
-        f.high += (high - f.high) * smooth;
-        f.level += (level - f.level) * smooth;
-
-        f.phase += 0.03 + f.high * 0.25 + f.level * 0.06;
-
-        audioRAFRef.current = requestAnimationFrame(update);
-      };
-
-      update();
+        
+        updateAudio();
+      } catch (err) {
+        console.error('Audio init failed:', err);
+        alert('Microphone access denied or unavailable');
+      }
     };
+    
+    initAudio();
+    
+    return () => {
+      if (audioContextRef.current) audioContextRef.current.close();
+    };
+  }, [audioEnabled, selectedDevice]);
 
-    init();
-  }, [audioEnabled]);
-
-  // =========================
-  // PHASE FIELD (REAL MOIRÉ)
-  // =========================
-  const phaseField = (x, y) => {
-    if (!audioEnabled) return 0;
-
-    const f = audioFrame.current;
-    const amt = settings.current.audioAmount;
-
-    const fx = 0.02 * (1 + f.mid * 0.15);
-    const fy = fx * settings.current.interferenceRatio;
-
-    const p1 = Math.sin(y * fy + f.phase * 0.8) * f.bass * amt * 2.2;
-    const p2 = Math.sin(x * fx - f.phase * 1.1) * f.mid * amt * 1.9;
-    const shimmer =
-      Math.sin((x + y) * 0.08 + f.phase * 3.5) * f.high * amt * 0.4;
-
-    return p1 + p2 + shimmer;
+  const getAudioWiggle = (position, lineIndex) => {
+    if (!audioEnabled || !audioDataRef.current) return { x: 0, y: 0 };
+    
+    const data = audioDataRef.current;
+    const len = data.length;
+    const sensitivity = settings.audioSensitivity;
+    const freq = settings.wiggleFrequency * 0.01;
+    const amount = settings.wiggleAmount;
+    
+    let wiggleX = 0;
+    let wiggleY = 0;
+    
+    if (settings.wiggleBass) {
+      const bassData = data.slice(0, Math.floor(len * 0.1));
+      const idx = Math.floor((position * freq + lineIndex * 0.5) * bassData.length) % bassData.length;
+      const val = (bassData[idx] / 255) * sensitivity;
+      wiggleX += Math.sin(position * freq * 2 + lineIndex) * val * amount;
+      wiggleY += Math.cos(position * freq * 2 + lineIndex) * val * amount;
+    }
+    
+    if (settings.wiggleMid) {
+      const midData = data.slice(Math.floor(len * 0.1), Math.floor(len * 0.4));
+      const idx = Math.floor((position * freq * 2 + lineIndex * 0.3) * midData.length) % midData.length;
+      const val = (midData[idx] / 255) * sensitivity;
+      wiggleX += Math.sin(position * freq * 4 + lineIndex * 1.5) * val * amount * 0.7;
+      wiggleY += Math.cos(position * freq * 4 + lineIndex * 1.5) * val * amount * 0.7;
+    }
+    
+    if (settings.wiggleHigh) {
+      const highData = data.slice(Math.floor(len * 0.4), len);
+      const idx = Math.floor((position * freq * 4 + lineIndex * 0.2) * highData.length) % highData.length;
+      const val = (highData[idx] / 255) * sensitivity;
+      wiggleX += Math.sin(position * freq * 8 + lineIndex * 2) * val * amount * 0.5;
+      wiggleY += Math.cos(position * freq * 8 + lineIndex * 2) * val * amount * 0.5;
+    }
+    
+    return { x: wiggleX, y: wiggleY };
   };
 
-  // =========================
-  // DRAW
-  // =========================
-  const render = () => {
+  const noise = (() => {
+    const p = new Array(512).fill(0).map(() => Math.floor(Math.random() * 256));
+    return (x, y) => {
+      const X = Math.floor(x) & 255;
+      const Y = Math.floor(y) & 255;
+      x -= Math.floor(x);
+      y -= Math.floor(y);
+      const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+      const lerp = (t, a, b) => a + t * (b - a);
+      const u = fade(x);
+      const v = fade(y);
+      const A = p[X] + Y;
+      const B = p[X + 1] + Y;
+      return lerp(v, lerp(u, p[A] / 128 - 1, p[B] / 128 - 1), lerp(u, p[A + 1] / 128 - 1, p[B + 1] / 128 - 1));
+    };
+  })();
+
+  const getDistortion = (x, y, time, strength) => {
+    const freq = 0.01;
+    return {
+      x: noise(x * freq + time * 0.1, y * freq) * strength,
+      y: noise(x * freq + 100, y * freq + 100 + time * 0.1) * strength
+    };
+  };
+
+  const render = (time = 0) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-
-    const w = canvas.width = canvas.offsetWidth;
-    const h = canvas.height = canvas.offsetHeight;
-
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = settings.current.thickness;
-
-    // ---------- LAYER A ----------
-    for (let x = 0; x < w; x += settings.current.spacing) {
-      ctx.beginPath();
-      let first = true;
-      for (let y = 0; y < h; y++) {
-        let dx = x + phaseField(x, y);
-        if (first) {
-          ctx.moveTo(dx, y);
-          first = false;
-        } else ctx.lineTo(dx, y);
+    
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#000000';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = settings.lineThickness;
+    
+    const animTime = isAnimating ? time * 0.001 : 0;
+    
+    if (settings.patternType === 'vertical') {
+      let lineIndex = 0;
+      for (let x = 0; x < width; x += settings.spacing) {
+        ctx.beginPath();
+        for (let y = 0; y < height; y += 2) {
+          let drawX = x;
+          let drawY = y;
+          
+          const wiggle = getAudioWiggle(y, lineIndex);
+          drawX += wiggle.x;
+          
+          if (settings.distortionEnabled) {
+            const dist = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength);
+            drawX += dist.x;
+            drawY += dist.y;
+          }
+          
+          if (y === 0) ctx.moveTo(drawX, drawY);
+          else ctx.lineTo(drawX, drawY);
+        }
+        ctx.stroke();
+        lineIndex++;
       }
-      ctx.stroke();
-    }
-
-    // ---------- LAYER B (interference) ----------
-    ctx.globalAlpha = 0.65;
-    for (let y = 0; y < h; y += settings.current.spacing * 1.01) {
-      ctx.beginPath();
-      let first = true;
-      for (let x = 0; x < w; x++) {
-        let dy = y + phaseField(x, y);
-        if (first) {
-          ctx.moveTo(x, dy);
-          first = false;
-        } else ctx.lineTo(x, dy);
+    } else {
+      let lineIndex = 0;
+      for (let y = 0; y < height; y += settings.spacing) {
+        ctx.beginPath();
+        for (let x = 0; x < width; x += 2) {
+          let drawX = x;
+          let drawY = y;
+          
+          const wiggle = getAudioWiggle(x, lineIndex);
+          drawY += wiggle.y;
+          
+          if (settings.distortionEnabled) {
+            const dist = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength);
+            drawX += dist.x;
+            drawY += dist.y;
+          }
+          
+          if (x === 0) ctx.moveTo(drawX, drawY);
+          else ctx.lineTo(drawX, drawY);
+        }
+        ctx.stroke();
+        lineIndex++;
       }
-      ctx.stroke();
     }
-    ctx.globalAlpha = 1;
   };
 
-  // =========================
-  // RAF LOOP
-  // =========================
   useEffect(() => {
-    const loop = () => {
-      if (isAnimating) render();
-      rafRef.current = requestAnimationFrame(loop);
+    const animate = (time) => {
+      render(time);
+      animationRef.current = requestAnimationFrame(animate);
     };
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [isAnimating, audioEnabled]);
+    animationRef.current = requestAnimationFrame(animate);
+    return () => {
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    };
+  }, [settings, isAnimating, audioEnabled]);
 
-  // =========================
-  // UI
-  // =========================
+  useEffect(() => {
+    const handleResize = () => {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        render();
+      }
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   return (
-    <div style={{ width: "100vw", height: "100vh", display: "flex" }}>
-      <div style={{ width: 220, padding: 12, background: "#fff", borderRight: "1px solid #ddd" }}>
-        <button onClick={() => setIsAnimating(v => !v)}>
-          {isAnimating ? <Pause /> : <Play />}
-        </button>
+    <div className="w-full h-screen bg-gray-100 flex">
+      <div className="w-80 bg-white shadow-lg p-4 overflow-y-auto space-y-4">
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setIsAnimating(!isAnimating)} className="flex items-center gap-1 px-3 py-2 bg-blue-500 text-white rounded text-sm">
+            {isAnimating ? <><Pause size={14} /> Pause</> : <><Play size={14} /> Play</>}
+          </button>
+          <button onClick={() => setSettings(prev => ({ ...prev, lineThickness: Math.random() * 8 + 2, spacing: Math.random() * 30 + 15, distortionStrength: Math.random() * 40 + 10 }))} className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
+            <RotateCcw size={14} /> Random
+          </button>
+          <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'audio-moire.png'; link.href = canvas.toDataURL(); link.click(); }} className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
+            <Download size={14} /> Save
+          </button>
+        </div>
 
-        <label style={{ display: "block", marginTop: 12 }}>
-          <input
-            type="checkbox"
-            checked={audioEnabled}
-            onChange={e => setAudioEnabled(e.target.checked)}
-          />
-          Audio Reactive
-        </label>
+        <div>
+          <h3 className="font-bold mb-2">🎛️ Pulsar 23 Audio Input</h3>
+          <label className="flex items-center mb-3">
+            <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} className="mr-2" />
+            Enable Audio Reactivity
+          </label>
+          
+          {audioEnabled && (
+            <div className="space-y-3">
+              {audioDevices.length > 0 && (
+                <div>
+                  <label className="block text-xs mb-1">Input Device:</label>
+                  <select value={selectedDevice || ''} onChange={(e) => setSelectedDevice(e.target.value)} className="w-full p-2 border rounded text-xs">
+                    {audioDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Device ${d.deviceId.substring(0, 8)}`}</option>)}
+                  </select>
+                </div>
+              )}
+              
+              <div>
+                <label className="block text-xs mb-1">Input Gain: {settings.audioSensitivity.toFixed(1)}x</label>
+                <input type="range" min="0.5" max="10" step="0.1" value={settings.audioSensitivity} onChange={(e) => setSettings(prev => ({ ...prev, audioSensitivity: parseFloat(e.target.value) }))} className="w-full" />
+              </div>
+              
+              <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-3 rounded space-y-2">
+                <div className="text-xs">
+                  <div className="font-medium mb-1">Overall: {(audioLevels.overall * 100).toFixed(0)}%</div>
+                  <div className="w-full bg-gray-200 rounded h-2">
+                    <div className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded" style={{ width: (audioLevels.overall * 100) + '%' }} />
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <div className="font-medium mb-1">Bass</div>
+                    <div className="w-full bg-gray-200 rounded h-1.5">
+                      <div className="bg-red-500 h-1.5 rounded" style={{ width: (audioLevels.bass * 100) + '%' }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-medium mb-1">Mid</div>
+                    <div className="w-full bg-gray-200 rounded h-1.5">
+                      <div className="bg-green-500 h-1.5 rounded" style={{ width: (audioLevels.mid * 100) + '%' }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-medium mb-1">High</div>
+                    <div className="w-full bg-gray-200 rounded h-1.5">
+                      <div className="bg-blue-500 h-1.5 rounded" style={{ width: (audioLevels.high * 100) + '%' }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-2 bg-gray-50 p-2 rounded">
+                <div className="text-xs font-semibold">Line Wiggle Controls:</div>
+                <label className="flex items-center text-sm">
+                  <input type="checkbox" checked={settings.wiggleBass} onChange={(e) => setSettings(prev => ({ ...prev, wiggleBass: e.target.checked }))} className="mr-2" />
+                  Bass Wiggle 🔴
+                </label>
+                <label className="flex items-center text-sm">
+                  <input type="checkbox" checked={settings.wiggleMid} onChange={(e) => setSettings(prev => ({ ...prev, wiggleMid: e.target.checked }))} className="mr-2" />
+                  Mid Wiggle 🟢
+                </label>
+                <label className="flex items-center text-sm">
+                  <input type="checkbox" checked={settings.wiggleHigh} onChange={(e) => setSettings(prev => ({ ...prev, wiggleHigh: e.target.checked }))} className="mr-2" />
+                  High Wiggle 🔵
+                </label>
+              </div>
+              
+              <div>
+                <label className="block text-xs mb-1">Wiggle Amount: {settings.wiggleAmount}</label>
+                <input type="range" min="5" max="80" value={settings.wiggleAmount} onChange={(e) => setSettings(prev => ({ ...prev, wiggleAmount: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+              
+              <div>
+                <label className="block text-xs mb-1">Wiggle Frequency: {settings.wiggleFrequency}</label>
+                <input type="range" min="1" max="10" value={settings.wiggleFrequency} onChange={(e) => setSettings(prev => ({ ...prev, wiggleFrequency: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+            </div>
+          )}
+        </div>
 
-        <label style={{ display: "block", marginTop: 12 }}>
-          Audio Amount
-          <input
-            type="range"
-            min="0"
-            max="140"
-            defaultValue={settings.current.audioAmount}
-            onChange={e => (settings.current.audioAmount = +e.target.value)}
-          />
-        </label>
+        <div>
+          <h3 className="font-bold mb-2">Pattern</h3>
+          <select value={settings.patternType} onChange={(e) => setSettings(prev => ({ ...prev, patternType: e.target.value }))} className="w-full p-2 border rounded mb-2">
+            <option value="vertical">Vertical Lines</option>
+            <option value="horizontal">Horizontal Lines</option>
+          </select>
+          
+          <div>
+            <label className="block text-sm mb-1">Thickness: {settings.lineThickness.toFixed(1)}</label>
+            <input type="range" min="1" max="10" step="0.5" value={settings.lineThickness} onChange={(e) => setSettings(prev => ({ ...prev, lineThickness: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+          
+          <div className="mt-2">
+            <label className="block text-sm mb-1">Spacing: {settings.spacing}</label>
+            <input type="range" min="10" max="60" value={settings.spacing} onChange={(e) => setSettings(prev => ({ ...prev, spacing: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+        </div>
+
+        <div>
+          <h3 className="font-bold mb-2">Distortion</h3>
+          <label className="flex items-center mb-2">
+            <input type="checkbox" checked={settings.distortionEnabled} onChange={(e) => setSettings(prev => ({ ...prev, distortionEnabled: e.target.checked }))} className="mr-2" />
+            Enable Distortion
+          </label>
+          {settings.distortionEnabled && (
+            <div>
+              <label className="block text-sm mb-1">Strength: {settings.distortionStrength}</label>
+              <input type="range" min="5" max="80" value={settings.distortionStrength} onChange={(e) => setSettings(prev => ({ ...prev, distortionStrength: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+          )}
+        </div>
       </div>
 
-      <canvas
-        ref={canvasRef}
-        style={{ flex: 1, display: "block", background: "#fff" }}
-      />
+      <div className="flex-1 p-4">
+        <canvas ref={canvasRef} className="w-full h-full border border-gray-300 bg-white rounded-lg shadow-lg" />
+      </div>
     </div>
   );
 };
 
-export default PixelMoireGenerator;
+export default AudioReactiveMoire;
