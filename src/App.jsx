@@ -162,7 +162,16 @@ const AudioPatternGenerator = () => {
         }
       }
     } else if (settings.patternType === 'radial') {
-      // Radial - each ring and position samples different frequency
+      // Radial - apply rotation here only
+      const rotation = settings.audioReactiveRotation
+        ? settings.rotation + audio.freq * Math.PI
+        : settings.rotation * (Math.PI / 180);
+      
+      ctx.save();
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(rotation);
+      ctx.translate(-w / 2, -h / 2);
+      
       const centerX = w / 2;
       const centerY = h / 2;
       const angleStep = (Math.PI * 2) / repetition;
@@ -221,8 +230,18 @@ const AudioPatternGenerator = () => {
           ctx.restore();
         }
       }
+      
+      ctx.restore(); // Close radial rotation
     } else if (settings.patternType === 'scatter') {
-      // Scatter - spiral elements each get unique frequency
+      // Scatter - apply rotation here only
+      const rotation = settings.audioReactiveRotation
+        ? settings.rotation + audio.freq * Math.PI
+        : settings.rotation * (Math.PI / 180);
+      
+      ctx.save();
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(rotation);
+      ctx.translate(-w / 2, -h / 2);
       const goldenAngle = Math.PI * (3 - Math.sqrt(5));
       const totalElements = repetition * 8;
       
@@ -276,6 +295,8 @@ const AudioPatternGenerator = () => {
         
         ctx.restore();
       }
+      
+      ctx.restore(); // Close scatter rotation
     }
 
     ctx.restore();
