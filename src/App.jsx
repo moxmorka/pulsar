@@ -9,7 +9,7 @@ export default function PixelMoireGenerator() {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [bassLevel, setBassLevel] = useState(0);
-  const speedMultiplier = useRef(1);
+  const distortionMultiplier = useRef(1);
 
   const [settings, setSettings] = useState({
     patternType: 'vertical-lines',
@@ -37,7 +37,7 @@ export default function PixelMoireGenerator() {
   useEffect(() => {
     if (!audioEnabled) {
       if (audioContextRef.current) audioContextRef.current.close();
-      speedMultiplier.current = 1;
+      distortionMultiplier.current = 1;
       return;
     }
 
@@ -64,13 +64,12 @@ export default function PixelMoireGenerator() {
           setAudioLevel(overall);
           setBassLevel(bassAvg);
           
-          // Smooth speed control: 0.01x (frozen) to 5x (fast)
-          // Use exponential curve for smoother feel
-          const rawSpeed = overall * settings.audioSensitivity;
-          const targetSpeed = 0.01 + (rawSpeed * rawSpeed * 5); // Exponential for smoothness
+          // Control distortion INTENSITY (how much it wobbles), not speed
+          // Range: 0.1x (barely moving) to 3x (intense wobble)
+          const targetIntensity = 0.1 + (overall * settings.audioSensitivity * 3);
           
           // Smooth interpolation
-          speedMultiplier.current = speedMultiplier.current + (targetSpeed - speedMultiplier.current) * 0.1;
+          distortionMultiplier.current = distortionMultiplier.current + (targetIntensity - distortionMultiplier.current) * 0.1;
           
           requestAnimationFrame(updateAudio);
         };
@@ -154,8 +153,11 @@ export default function PixelMoireGenerator() {
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
     
-    // Use speedMultiplier.current DIRECTLY
-    const animTime = time * 0.001 * settings.distortionSpeed * speedMultiplier.current;
+    // CONTINUOUS forward motion (always flows)
+    const animTime = time * 0.001 * settings.distortionSpeed;
+    
+    // Audio controls distortion STRENGTH, not time
+    const audioDistortionStrength = settings.distortionStrength * distortionMultiplier.current;
     
     // Draw pattern
     if (settings.patternType === 'vertical-lines') {
@@ -164,7 +166,7 @@ export default function PixelMoireGenerator() {
         for (let y = 0; y < height; y++) {
           let drawX = x, drawY = y;
           if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
             drawX += d.x;
             drawY += d.y;
           }
@@ -180,7 +182,7 @@ export default function PixelMoireGenerator() {
         for (let x = 0; x < width; x++) {
           let drawX = x, drawY = y;
           if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
             drawX += d.x;
             drawY += d.y;
           }
@@ -270,7 +272,7 @@ export default function PixelMoireGenerator() {
           <div className="font-bold mb-2">DEBUG:</div>
           <div>Audio: {audioLevel.toFixed(3)}</div>
           <div>Bass: {bassLevel.toFixed(3)}</div>
-          <div>Speed: {speedMultiplier.current.toFixed(2)}x</div>
+          <div>Intensity: {distortionMultiplier.current.toFixed(2)}x</div>
         </div>
 
         <div>
@@ -284,9 +286,9 @@ export default function PixelMoireGenerator() {
             <div className="space-y-2">
               <div>
                 <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(2)}x</label>
-                <input type="range" min="0.01" max="2" step="0.01" value={settings.audioSensitivity} 
+                <input type="range" min="0.1" max="3" step="0.1" value={settings.audioSensitivity} 
                        onChange={(e) => setSettings(s => ({ ...s, audioSensitivity: parseFloat(e.target.value) }))} className="w-full" />
-                <div className="text-xs text-gray-500 mt-1">Low = frozen, High = fast</div>
+                <div className="text-xs text-gray-500 mt-1">Controls distortion intensity</div>
               </div>
               <div className="text-xs">Level: {(audioLevel * 100).toFixed(0)}%</div>
               <div className="w-full bg-gray-200 rounded h-2">
