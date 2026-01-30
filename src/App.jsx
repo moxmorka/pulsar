@@ -1,246 +1,95 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, Download, Type, Grid } from 'lucide-react';
+import { RotateCcw, Download } from 'lucide-react';
 
 export default function PixelMoireGenerator() {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
-  const [customFonts, setCustomFonts] = useState([]);
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioDevices, setAudioDevices] = useState([]);
-  const [selectedAudioDevice, setSelectedAudioDevice] = useState(null);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
+  const [audioEnabled, setAudioEnabled] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [bassLevel, setBassLevel] = useState(0);
-  const [midLevel, setMidLevel] = useState(0);
-  const [highLevel, setHighLevel] = useState(0);
-  const [audioTimeMultiplier, setAudioTimeMultiplier] = useState(1);
-  const accumulatedTime = useRef(0);
-  const lastFrameTime = useRef(0);
-  const targetSpeedMultiplier = useRef(1);
-  const targetPixelSize = useRef(4);
-  const audioFrameRef = useRef(null);
-  const sensitivityRef = useRef(1.5);
-  const audioReactiveSpeedRef = useRef(false);
-  const audioReactivePixelsRef = useRef(false);
-  const pixelationEnabledRef = useRef(false);
+  const speedMultiplier = useRef(1);
 
   const [settings, setSettings] = useState({
     patternType: 'vertical-lines',
     lineThickness: 10,
     spacing: 20,
-    textEnabled: false,
-    text: '',
-    fontSize: 120,
-    font: 'Impact',
-    shapeEnabled: false,
-    shapeIndex: 0,
-    shapeSize: 100,
     distortionEnabled: true,
     distortionType: 'liquify',
     distortionStrength: 20,
     distortionSpeed: 1,
     pixelationEnabled: false,
     pixelSize: 4,
-    audioReactiveSpeed: false,
-    audioReactivePixels: false,
-    audioSensitivity: 1.5
+    audioSensitivity: 2
   });
 
-  const systemFonts = ['Impact', 'Arial Black', 'Helvetica', 'Times New Roman'];
-  const webFonts = ['Roboto', 'Montserrat', 'Bebas Neue', 'Anton'];
-  
-  // Keep refs in sync with settings
-  useEffect(() => {
-    sensitivityRef.current = settings.audioSensitivity;
-    audioReactiveSpeedRef.current = settings.audioReactiveSpeed;
-    audioReactivePixelsRef.current = settings.audioReactivePixels;
-    pixelationEnabledRef.current = settings.pixelationEnabled;
-  }, [settings.audioSensitivity, settings.audioReactiveSpeed, settings.audioReactivePixels, settings.pixelationEnabled]);
-  
   const distortionTypes = [
-    { value: 'liquify', label: 'Liquify Flow' },
-    { value: 'ripple', label: 'Ripple Waves' },
-    { value: 'swirl', label: 'Swirl Vortex' },
-    { value: 'turbulence', label: 'Turbulence' },
-    { value: 'marble', label: 'Marble Veins' },
-    { value: 'wave', label: 'Wave Field' }
+    { value: 'liquify', label: 'Liquify' },
+    { value: 'ripple', label: 'Ripple' },
+    { value: 'swirl', label: 'Swirl' }
   ];
 
-  const shapes = [
-    { name: 'Circle', draw: (ctx, size) => { ctx.beginPath(); ctx.arc(size/2, size/2, size * 0.4, 0, Math.PI * 2); ctx.stroke(); }},
-    { name: 'Square', draw: (ctx, size) => { const s = size * 0.7; const offset = (size - s) / 2; ctx.strokeRect(offset, offset, s, s); }},
-    { name: 'Triangle', draw: (ctx, size) => { ctx.beginPath(); ctx.moveTo(size/2, size * 0.1); ctx.lineTo(size * 0.9, size * 0.9); ctx.lineTo(size * 0.1, size * 0.9); ctx.closePath(); ctx.stroke(); }}
-  ];
-
-  useEffect(() => {
-    const link = document.createElement('link');
-    link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@900&family=Montserrat:wght@900&family=Bebas+Neue&family=Anton&display=swap';
-    link.rel = 'stylesheet';
-    document.head.appendChild(link);
-  }, []);
-
-  useEffect(() => {
-    const getDevices = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(d => d.kind === 'audioinput');
-        setAudioDevices(audioInputs);
-        if (audioInputs.length > 0 && !selectedAudioDevice) {
-          setSelectedAudioDevice(audioInputs[0].deviceId);
-        }
-      } catch (err) {
-        console.error('Device enumeration failed:', err);
-      }
-    };
-    getDevices();
-  }, [selectedAudioDevice]);
-
+  // Audio setup
   useEffect(() => {
     if (!audioEnabled) {
-      if (audioFrameRef.current) cancelAnimationFrame(audioFrameRef.current);
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-      }
-      setAudioTimeMultiplier(1);
+      if (audioContextRef.current) audioContextRef.current.close();
+      speedMultiplier.current = 1;
       return;
     }
 
     const initAudio = async () => {
       try {
-        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-          await audioContextRef.current.close();
-        }
-        
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: selectedAudioDevice ? { exact: selectedAudioDevice } : undefined,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false
-          }
-        });
-
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         audioContextRef.current = audioContext;
         const source = audioContext.createMediaStreamSource(stream);
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = 3.0;
         const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 8192;
-        analyser.smoothingTimeConstant = 0.1;
+        analyser.fftSize = 2048;
         analyserRef.current = analyser;
-        source.connect(gainNode);
-        gainNode.connect(analyser);
+        source.connect(analyser);
 
         const updateAudio = () => {
           if (!analyserRef.current) return;
-          
-          const bufferLength = analyserRef.current.frequencyBinCount;
-          const dataArray = new Uint8Array(bufferLength);
+          const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
           analyserRef.current.getByteFrequencyData(dataArray);
           
-          const bass = dataArray.slice(0, Math.floor(bufferLength * 0.1));
-          const mid = dataArray.slice(Math.floor(bufferLength * 0.1), Math.floor(bufferLength * 0.4));
-          const high = dataArray.slice(Math.floor(bufferLength * 0.4), Math.floor(bufferLength * 0.8));
-          
+          const bass = dataArray.slice(0, 50);
           const bassAvg = bass.reduce((a, b) => a + b, 0) / bass.length / 255;
-          const midAvg = mid.reduce((a, b) => a + b, 0) / mid.length / 255;
-          const highAvg = high.reduce((a, b) => a + b, 0) / high.length / 255;
-          const sum = dataArray.reduce((a, b) => a + b, 0);
-          const normalizedLevel = sum / bufferLength / 255;
+          const overall = dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
           
-          setAudioLevel(normalizedLevel);
+          setAudioLevel(overall);
           setBassLevel(bassAvg);
-          setMidLevel(midAvg);
-          setHighLevel(highAvg);
           
-          const sensitivity = sensitivityRef.current;
-          const amplifiedLevel = Math.min(normalizedLevel * sensitivity, 1);
-          const amplifiedBass = Math.min(bassAvg * sensitivity, 1);
+          // DIRECT speed control - no smoothing, no refs, just set it
+          speedMultiplier.current = 0.1 + (overall * settings.audioSensitivity * 10);
           
-          // Set target values - will be smoothly interpolated in render
-          if (audioReactiveSpeedRef.current) {
-            targetSpeedMultiplier.current = 0.2 + amplifiedLevel * 2.8;
-          } else {
-            targetSpeedMultiplier.current = 1;
-          }
-          
-          if (audioReactivePixelsRef.current && pixelationEnabledRef.current) {
-            targetPixelSize.current = 4 + amplifiedBass * 2;
-          } else {
-            targetPixelSize.current = 4;
-          }
-          
-          audioFrameRef.current = requestAnimationFrame(updateAudio);
+          requestAnimationFrame(updateAudio);
         };
-        
         updateAudio();
       } catch (err) {
-        alert('Audio Error: ' + err.message);
+        alert('Audio failed: ' + err.message);
       }
     };
 
     initAudio();
-    
-    return () => {
-      if (audioFrameRef.current) cancelAnimationFrame(audioFrameRef.current);
-    };
-  }, [audioEnabled, selectedAudioDevice]);
+  }, [audioEnabled]);
 
+  // Simple noise
   const noise = (() => {
     const p = [];
-    for (let i = 0; i < 512; i++) p[i] = Math.floor(Math.random() * 256);
+    for (let i = 0; i < 256; i++) p[i] = Math.random();
     return (x, y) => {
       const X = Math.floor(x) & 255;
       const Y = Math.floor(y) & 255;
-      x -= Math.floor(x);
-      y -= Math.floor(y);
-      const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
-      const lerp = (t, a, b) => a + t * (b - a);
-      return lerp(fade(y), lerp(fade(x), p[p[X] + Y] / 128 - 1, p[p[X + 1] + Y] / 128 - 1), 
-                            lerp(fade(x), p[p[X] + Y + 1] / 128 - 1, p[p[X + 1] + Y + 1] / 128 - 1));
+      return p[(X + Y) & 255];
     };
   })();
 
-  const getDistortion = (x, y, time, strength, type) => {
-    const freq = 0.01;
+  const getDistortion = (x, y, time, strength) => {
     const t = time || 0;
-    let dx = 0, dy = 0;
-    
-    switch (type) {
-      case 'liquify':
-        dx = noise(x * freq + t * 0.1, y * freq) * strength;
-        dy = noise(x * freq + 100, y * freq + 100 + t * 0.1) * strength;
-        break;
-      case 'ripple':
-        const dist = Math.sqrt(x * x + y * y);
-        const ripple = Math.sin(dist * 0.02 + t * 2) * strength;
-        dx = (x / (dist || 1)) * ripple;
-        dy = (y / (dist || 1)) * ripple;
-        break;
-      case 'swirl':
-        const angle = Math.atan2(y, x);
-        const radius = Math.sqrt(x * x + y * y);
-        const newAngle = angle + (strength * 0.001 + t * 0.5) * (1 / (1 + radius * 0.01));
-        dx = Math.cos(newAngle) * radius - x;
-        dy = Math.sin(newAngle) * radius - y;
-        break;
-      case 'turbulence':
-        dx = Math.abs(noise(x * freq + t * 0.2, y * freq)) * strength;
-        dy = Math.abs(noise(x * freq + 200, y * freq + 200 + t * 0.2)) * strength;
-        break;
-      case 'marble':
-        const m1 = x * freq + strength * 0.1 * noise(x * freq * 2 + t * 0.1, y * freq * 2);
-        const m2 = y * freq + strength * 0.1 * noise(x * freq * 2 + 100, y * freq * 2 + 100 + t * 0.1);
-        dx = Math.sin(m1 + t * 0.5) * strength;
-        dy = Math.sin(m2 + t * 0.5) * strength;
-        break;
-      case 'wave':
-        dx = Math.sin(y * freq * 5 + t * 2) * strength;
-        dy = Math.cos(x * freq * 3 + t * 1.5) * strength;
-        break;
-    }
+    const dx = noise(x * 0.01 + t * 0.1, y * 0.01) * strength;
+    const dy = noise(x * 0.01 + 100, y * 0.01 + 100 + t * 0.1) * strength;
     return { x: dx, y: dy };
   };
 
@@ -251,39 +100,21 @@ export default function PixelMoireGenerator() {
     const width = canvas.width;
     const height = canvas.height;
     
-    // Calculate delta time
-    if (lastFrameTime.current === 0) lastFrameTime.current = time;
-    const deltaTime = time - lastFrameTime.current;
-    lastFrameTime.current = time;
-    
-    // Accumulate time with speed multiplier - use target directly for instant response
-    const currentSpeedMultiplier = targetSpeedMultiplier.current;
-    accumulatedTime.current += deltaTime * currentSpeedMultiplier;
-    
-    // Update display value with smoothing
-    const speedDiff = currentSpeedMultiplier - audioTimeMultiplier;
-    if (Math.abs(speedDiff) > 0.01) {
-      setAudioTimeMultiplier(audioTimeMultiplier + speedDiff * 0.2);
-    }
-    
-    let currentPixelSize = settings.pixelSize;
-    if (settings.audioReactivePixels && settings.pixelationEnabled) {
-      currentPixelSize = settings.pixelSize + (targetPixelSize.current - settings.pixelSize) * 0.1;
-    }
-    
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
     
-    const animTime = accumulatedTime.current * 0.001 * settings.distortionSpeed;
+    // Use speedMultiplier.current DIRECTLY
+    const animTime = time * 0.001 * settings.distortionSpeed * speedMultiplier.current;
     
+    // Draw pattern
     if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
         ctx.beginPath();
         for (let y = 0; y < height; y++) {
           let drawX = x, drawY = y;
           if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
+            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength);
             drawX += d.x;
             drawY += d.y;
           }
@@ -293,37 +124,13 @@ export default function PixelMoireGenerator() {
         ctx.lineWidth = settings.lineThickness;
         ctx.stroke();
       }
-    } else if (settings.patternType === 'horizontal-lines') {
-      for (let y = 0; y < height; y += settings.spacing) {
-        ctx.beginPath();
-        for (let x = 0; x < width; x++) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          if (x === 0) ctx.moveTo(drawX, drawY);
-          else ctx.lineTo(drawX, drawY);
-        }
-        ctx.lineWidth = settings.lineThickness;
-        ctx.stroke();
-      }
-    } else if (settings.patternType === 'checkerboard') {
-      const cellSize = settings.spacing;
-      for (let y = 0; y < height; y += cellSize) {
-        for (let x = 0; x < width; x += cellSize) {
-          if ((Math.floor(x / cellSize) + Math.floor(y / cellSize)) % 2 === 0) {
-            ctx.fillRect(x, y, cellSize, cellSize);
-          }
-        }
-      }
     }
     
-    if (settings.pixelationEnabled && currentPixelSize > 1) {
-      const pixelSize = Math.round(currentPixelSize);
+    // Pixelation
+    if (settings.pixelationEnabled && settings.pixelSize > 1) {
       const imageData = ctx.getImageData(0, 0, width, height);
       const pixelated = ctx.createImageData(width, height);
+      const pixelSize = Math.round(4 + bassLevel * settings.audioSensitivity);
       for (let y = 0; y < height; y += pixelSize) {
         for (let x = 0; x < width; x += pixelSize) {
           const sampleX = Math.min(x + Math.floor(pixelSize / 2), width - 1);
@@ -378,74 +185,43 @@ export default function PixelMoireGenerator() {
                   className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
             <RotateCcw size={14} /> Random
           </button>
-          <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'pattern.png'; link.href = canvas.toDataURL(); link.click(); }} 
+          <button onClick={() => { const link = document.createElement('a'); link.download = 'pattern.png'; link.href = canvasRef.current.toDataURL(); link.click(); }} 
                   className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
             <Download size={14} /> Save
           </button>
+        </div>
+
+        <div className="bg-yellow-200 border-2 border-red-500 p-3 rounded text-xs font-mono">
+          <div className="font-bold mb-2">DEBUG:</div>
+          <div>Audio: {audioLevel.toFixed(3)}</div>
+          <div>Bass: {bassLevel.toFixed(3)}</div>
+          <div>Speed: {speedMultiplier.current.toFixed(2)}x</div>
         </div>
 
         <div>
           <h3 className="font-semibold mb-2">Audio</h3>
           <label className="flex items-center mb-2">
             <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} className="mr-2" />
-            Enable Audio
+            Enable Audio Input
           </label>
           
           {audioEnabled && (
             <div className="space-y-2">
-              
-              <div className="text-sm bg-yellow-200 border-2 border-red-500 p-3 rounded font-mono">
-                <div className="font-bold mb-2">🔍 LOOK HERE:</div>
-                <div>Level: {audioLevel.toFixed(3)}</div>
-                <div>Bass: {bassLevel.toFixed(3)}</div>
-                <div>TargetSpeed: {targetSpeedMultiplier.current.toFixed(2)}x</div>
-                <div>CurrentSpeed: {audioTimeMultiplier.toFixed(2)}x</div>
-                <div>SpeedActive: {audioReactiveSpeedRef.current ? 'YES' : 'NO'}</div>
-                <div>Sensitivity: {sensitivityRef.current.toFixed(1)}x</div>
-              </div>
-              
-              <select value={selectedAudioDevice || ''} onChange={(e) => setSelectedAudioDevice(e.target.value)} className="w-full p-2 border rounded text-xs">
-                {audioDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId.substring(0, 8)}</option>)}
-              </select>
-
               <div>
                 <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(1)}x</label>
-                <input type="range" min="0.1" max="10" step="0.1" value={settings.audioSensitivity} 
-                       onChange={(e) => {
-                         const val = parseFloat(e.target.value);
-                         setSettings(s => ({ ...s, audioSensitivity: val }));
-                         sensitivityRef.current = val;
-                       }} 
-                       className="w-full" />
+                <input type="range" min="0.1" max="5" step="0.1" value={settings.audioSensitivity} 
+                       onChange={(e) => setSettings(s => ({ ...s, audioSensitivity: parseFloat(e.target.value) }))} className="w-full" />
               </div>
-
-              <div className="text-xs">Bass: {(bassLevel * 100).toFixed(0)}%</div>
+              <div className="text-xs">Level: {(audioLevel * 100).toFixed(0)}%</div>
               <div className="w-full bg-gray-200 rounded h-2">
-                <div className="bg-red-500 h-2 rounded" style={{ width: `${bassLevel * 100}%` }} />
+                <div className="bg-blue-500 h-2 rounded" style={{ width: `${audioLevel * 100}%` }} />
               </div>
-
-              <label className="flex items-center">
-                <input type="checkbox" checked={settings.audioReactiveSpeed} 
-                       onChange={(e) => setSettings(s => ({ ...s, audioReactiveSpeed: e.target.checked }))} className="mr-2" />
-                <span className="text-sm">Speed (Overall)</span>
-              </label>
-
-              <label className="flex items-center">
-                <input type="checkbox" checked={settings.audioReactivePixels} 
-                       onChange={(e) => setSettings(s => ({ ...s, audioReactivePixels: e.target.checked }))} className="mr-2" />
-                <span className="text-sm">Pixels (Bass)</span>
-              </label>
             </div>
           )}
         </div>
 
         <div>
           <h3 className="font-semibold mb-2">Pattern</h3>
-          <select value={settings.patternType} onChange={(e) => setSettings(s => ({ ...s, patternType: e.target.value }))} className="w-full p-2 border rounded mb-2 text-sm">
-            <option value="vertical-lines">Vertical</option>
-            <option value="horizontal-lines">Horizontal</option>
-            <option value="checkerboard">Checkerboard</option>
-          </select>
           <label className="block text-sm mb-1">Thickness: {settings.lineThickness.toFixed(1)}</label>
           <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(s => ({ ...s, lineThickness: parseFloat(e.target.value) }))} className="w-full mb-2" />
           <label className="block text-sm mb-1">Spacing: {settings.spacing.toFixed(1)}</label>
@@ -460,12 +236,9 @@ export default function PixelMoireGenerator() {
           </label>
           {settings.distortionEnabled && (
             <div className="space-y-2">
-              <select value={settings.distortionType} onChange={(e) => setSettings(s => ({ ...s, distortionType: e.target.value }))} className="w-full p-2 border rounded text-sm">
-                {distortionTypes.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
               <label className="block text-sm mb-1">Strength: {settings.distortionStrength}</label>
               <input type="range" min="5" max="80" value={settings.distortionStrength} onChange={(e) => setSettings(s => ({ ...s, distortionStrength: parseInt(e.target.value) }))} className="w-full" />
-              <label className="block text-sm mb-1">Speed: {settings.distortionSpeed}</label>
+              <label className="block text-sm mb-1">Base Speed: {settings.distortionSpeed}</label>
               <input type="range" min="0.1" max="3" step="0.1" value={settings.distortionSpeed} onChange={(e) => setSettings(s => ({ ...s, distortionSpeed: parseFloat(e.target.value) }))} className="w-full" />
             </div>
           )}
@@ -475,14 +248,8 @@ export default function PixelMoireGenerator() {
           <h3 className="font-semibold mb-2">Pixelation</h3>
           <label className="flex items-center mb-2">
             <input type="checkbox" checked={settings.pixelationEnabled} onChange={(e) => setSettings(s => ({ ...s, pixelationEnabled: e.target.checked }))} className="mr-2" />
-            Enable
+            Enable (Bass Reactive)
           </label>
-          {settings.pixelationEnabled && (
-            <div>
-              <label className="block text-sm mb-1">Size: {settings.pixelSize}</label>
-              <input type="range" min="2" max="20" value={settings.pixelSize} onChange={(e) => setSettings(s => ({ ...s, pixelSize: parseInt(e.target.value) }))} className="w-full" />
-            </div>
-          )}
         </div>
       </div>
 
