@@ -404,7 +404,12 @@ export default function PixelMoireGenerator() {
               <div>
                 <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(1)}x</label>
                 <input type="range" min="0.1" max="10" step="0.1" value={settings.audioSensitivity} 
-                       onChange={(e) => setSettings(s => ({ ...s, audioSensitivity: parseFloat(e.target.value) }))} className="w-full" />
+                       onChange={(e) => {
+                         const val = parseFloat(e.target.value);
+                         setSettings(s => ({ ...s, audioSensitivity: val }));
+                         sensitivityRef.current = val;
+                       }} 
+                       className="w-full" />
               </div>
 
               <div className="text-xs">Bass: {(bassLevel * 100).toFixed(0)}%</div>
