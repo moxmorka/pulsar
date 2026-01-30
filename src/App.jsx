@@ -15,6 +15,8 @@ export default function PixelMoireGenerator() {
   const [midLevel, setMidLevel] = useState(0);
   const [highLevel, setHighLevel] = useState(0);
   const [audioTimeMultiplier, setAudioTimeMultiplier] = useState(1);
+  const accumulatedTime = useRef(0);
+  const lastFrameTime = useRef(0);
   const targetSpeedMultiplier = useRef(1);
   const targetPixelSize = useRef(4);
   const audioFrameRef = useRef(null);
@@ -249,6 +251,11 @@ export default function PixelMoireGenerator() {
     const width = canvas.width;
     const height = canvas.height;
     
+    // Calculate delta time
+    if (lastFrameTime.current === 0) lastFrameTime.current = time;
+    const deltaTime = time - lastFrameTime.current;
+    lastFrameTime.current = time;
+    
     // Smooth interpolation for audio reactivity
     const speedDiff = targetSpeedMultiplier.current - audioTimeMultiplier;
     if (Math.abs(speedDiff) > 0.01) {
@@ -260,11 +267,14 @@ export default function PixelMoireGenerator() {
       currentPixelSize = settings.pixelSize + (targetPixelSize.current - settings.pixelSize) * 0.1;
     }
     
+    // Accumulate time with speed multiplier
+    accumulatedTime.current += deltaTime * audioTimeMultiplier;
+    
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
     
-    const animTime = time * 0.001 * settings.distortionSpeed * audioTimeMultiplier;
+    const animTime = accumulatedTime.current * 0.001 * settings.distortionSpeed;
     
     if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
