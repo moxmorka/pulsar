@@ -16,8 +16,9 @@ export default function PixelMoireGenerator() {
   const [midLevel, setMidLevel] = useState(0);
   const [highLevel, setHighLevel] = useState(0);
   const [audioTimeMultiplier, setAudioTimeMultiplier] = useState(1);
+  const targetSpeedMultiplier = useRef(1);
+  const targetPixelSize = useRef(4);
   const lastPixelUpdate = useRef(0);
-  const lastSpeedUpdate = useRef(0);
   const audioFrameRef = useRef(null);
 
   const [settings, setSettings] = useState({
@@ -37,8 +38,6 @@ export default function PixelMoireGenerator() {
     distortionSpeed: 1,
     pixelationEnabled: false,
     pixelSize: 4,
-    gridSize: 20,
-    showGrid: false,
     audioReactiveSpeed: false,
     audioReactivePixels: false,
     audioSensitivity: 1.5
@@ -140,23 +139,21 @@ export default function PixelMoireGenerator() {
           setMidLevel(midAvg);
           setHighLevel(highAvg);
           
-          const now = Date.now();
           const sensitivity = settings.audioSensitivity;
           const amplifiedLevel = Math.min(normalizedLevel * sensitivity, 1);
           const amplifiedBass = Math.min(bassAvg * sensitivity, 1);
           
-          // Update speed max 10 times per second
-          if (settings.audioReactiveSpeed && now - lastSpeedUpdate.current > 100) {
-            setAudioTimeMultiplier(0.2 + amplifiedLevel * 2.8);
-            lastSpeedUpdate.current = now;
-          } else if (!settings.audioReactiveSpeed) {
-            setAudioTimeMultiplier(1);
+          // Set target values - will be smoothly interpolated in render
+          if (settings.audioReactiveSpeed) {
+            targetSpeedMultiplier.current = 0.2 + amplifiedLevel * 2.8;
+          } else {
+            targetSpeedMultiplier.current = 1;
           }
           
-          // Update pixels max 10 times per second
-          if (settings.audioReactivePixels && settings.pixelationEnabled && now - lastPixelUpdate.current > 100) {
-            setSettings(prev => ({ ...prev, pixelSize: Math.round(4 + amplifiedBass * 2) }));
-            lastPixelUpdate.current = now;
+          if (settings.audioReactivePixels && settings.pixelationEnabled) {
+            targetPixelSize.current = 4 + amplifiedBass * 2;
+          } else {
+            targetPixelSize.current = settings.pixelSize;
           }
           
           audioFrameRef.current = requestAnimationFrame(updateAudio);
@@ -234,11 +231,17 @@ export default function PixelMoireGenerator() {
     const width = canvas.width;
     const height = canvas.height;
     
+    // Smooth interpolation for audio reactivity
+    const currentSpeed = audioTimeMultiplier + (targetSpeedMultiplier.current - audioTimeMultiplier) * 0.1;
+    setAudioTimeMultiplier(currentSpeed);
+    
+    const currentPixelSize = settings.pixelSize + (targetPixelSize.current - settings.pixelSize) * 0.1;
+    
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
     
-    const animTime = isAnimating ? time * 0.001 * settings.distortionSpeed * audioTimeMultiplier : 0;
+    const animTime = isAnimating ? time * 0.001 * settings.distortionSpeed * currentSpeed : 0;
     
     if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
@@ -283,20 +286,21 @@ export default function PixelMoireGenerator() {
       }
     }
     
-    if (settings.pixelationEnabled && settings.pixelSize > 1) {
+    if (settings.pixelationEnabled && currentPixelSize > 1) {
+      const pixelSize = Math.round(currentPixelSize);
       const imageData = ctx.getImageData(0, 0, width, height);
       const pixelated = ctx.createImageData(width, height);
-      for (let y = 0; y < height; y += settings.pixelSize) {
-        for (let x = 0; x < width; x += settings.pixelSize) {
-          const sampleX = Math.min(x + Math.floor(settings.pixelSize / 2), width - 1);
-          const sampleY = Math.min(y + Math.floor(settings.pixelSize / 2), height - 1);
+      for (let y = 0; y < height; y += pixelSize) {
+        for (let x = 0; x < width; x += pixelSize) {
+          const sampleX = Math.min(x + Math.floor(pixelSize / 2), width - 1);
+          const sampleY = Math.min(y + Math.floor(pixelSize / 2), height - 1);
           const idx = (sampleY * width + sampleX) * 4;
           const r = imageData.data[idx];
           const g = imageData.data[idx + 1];
           const b = imageData.data[idx + 2];
           const a = imageData.data[idx + 3];
-          for (let py = y; py < Math.min(y + settings.pixelSize, height); py++) {
-            for (let px = x; px < Math.min(x + settings.pixelSize, width); px++) {
+          for (let py = y; py < Math.min(y + pixelSize, height); py++) {
+            for (let px = x; px < Math.min(x + pixelSize, width); px++) {
               const i = (py * width + px) * 4;
               pixelated.data[i] = r;
               pixelated.data[i + 1] = g;
@@ -308,25 +312,6 @@ export default function PixelMoireGenerator() {
       }
       ctx.putImageData(pixelated, 0, 0);
     }
-    
-    if (settings.showGrid) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
-      ctx.lineWidth = 1;
-      const cellSize = Math.min(width, height) / settings.gridSize;
-      for (let i = 0; i <= settings.gridSize; i++) {
-        const pos = i * cellSize;
-        ctx.beginPath();
-        ctx.moveTo(pos, 0);
-        ctx.lineTo(pos, height);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(0, pos);
-        ctx.lineTo(width, pos);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
   };
 
   useEffect(() => {
@@ -336,7 +321,7 @@ export default function PixelMoireGenerator() {
     };
     animationRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [isAnimating, settings, audioTimeMultiplier]);
+  }, [isAnimating, settings]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -366,17 +351,6 @@ export default function PixelMoireGenerator() {
                   className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
             <Download size={14} />
           </button>
-        </div>
-
-        <div className="bg-yellow-100 border-2 border-yellow-500 p-3 rounded">
-          <div className="font-bold text-sm mb-2">🔍 DEBUG</div>
-          <div className="text-xs font-mono space-y-1">
-            <div>Audio: {audioEnabled ? '✅' : '❌'}</div>
-            <div>Level: {audioLevel.toFixed(3)}</div>
-            <div>Bass: {bassLevel.toFixed(3)}</div>
-            <div>Speed: {audioTimeMultiplier.toFixed(2)}x</div>
-            <div>Pixel: {settings.pixelSize}</div>
-          </div>
         </div>
 
         <div>
@@ -460,20 +434,6 @@ export default function PixelMoireGenerator() {
             <div>
               <label className="block text-sm mb-1">Size: {settings.pixelSize}</label>
               <input type="range" min="2" max="20" value={settings.pixelSize} onChange={(e) => setSettings(s => ({ ...s, pixelSize: parseInt(e.target.value) }))} className="w-full" />
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3 className="font-semibold mb-2 flex items-center gap-1"><Grid size={16} />Grid</h3>
-          <label className="flex items-center mb-2">
-            <input type="checkbox" checked={settings.showGrid} onChange={(e) => setSettings(s => ({ ...s, showGrid: e.target.checked }))} className="mr-2" />
-            Show Grid
-          </label>
-          {settings.showGrid && (
-            <div>
-              <label className="block text-sm mb-1">Size: {settings.gridSize}x{settings.gridSize}</label>
-              <input type="range" min="10" max="50" value={settings.gridSize} onChange={(e) => setSettings(s => ({ ...s, gridSize: parseInt(e.target.value) }))} className="w-full" />
             </div>
           )}
         </div>
