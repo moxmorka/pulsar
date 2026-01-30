@@ -386,6 +386,17 @@ export default function PixelMoireGenerator() {
           
           {audioEnabled && (
             <div className="space-y-2">
+              
+              <div className="text-sm bg-yellow-200 border-2 border-red-500 p-3 rounded font-mono">
+                <div className="font-bold mb-2">🔍 LOOK HERE:</div>
+                <div>Level: {audioLevel.toFixed(3)}</div>
+                <div>Bass: {bassLevel.toFixed(3)}</div>
+                <div>TargetSpeed: {targetSpeedMultiplier.current.toFixed(2)}x</div>
+                <div>CurrentSpeed: {audioTimeMultiplier.toFixed(2)}x</div>
+                <div>SpeedActive: {audioReactiveSpeedRef.current ? 'YES' : 'NO'}</div>
+                <div>Sensitivity: {sensitivityRef.current.toFixed(1)}x</div>
+              </div>
+              
               <select value={selectedAudioDevice || ''} onChange={(e) => setSelectedAudioDevice(e.target.value)} className="w-full p-2 border rounded text-xs">
                 {audioDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId.substring(0, 8)}</option>)}
               </select>
