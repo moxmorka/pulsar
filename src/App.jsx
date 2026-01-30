@@ -18,8 +18,11 @@ export default function PixelMoireGenerator() {
   const [audioTimeMultiplier, setAudioTimeMultiplier] = useState(1);
   const targetSpeedMultiplier = useRef(1);
   const targetPixelSize = useRef(4);
-  const lastPixelUpdate = useRef(0);
   const audioFrameRef = useRef(null);
+  const sensitivityRef = useRef(1.5);
+  const audioReactiveSpeedRef = useRef(false);
+  const audioReactivePixelsRef = useRef(false);
+  const pixelationEnabledRef = useRef(false);
 
   const [settings, setSettings] = useState({
     patternType: 'vertical-lines',
@@ -45,6 +48,14 @@ export default function PixelMoireGenerator() {
 
   const systemFonts = ['Impact', 'Arial Black', 'Helvetica', 'Times New Roman'];
   const webFonts = ['Roboto', 'Montserrat', 'Bebas Neue', 'Anton'];
+  
+  // Keep refs in sync with settings
+  useEffect(() => {
+    sensitivityRef.current = settings.audioSensitivity;
+    audioReactiveSpeedRef.current = settings.audioReactiveSpeed;
+    audioReactivePixelsRef.current = settings.audioReactivePixels;
+    pixelationEnabledRef.current = settings.pixelationEnabled;
+  }, [settings.audioSensitivity, settings.audioReactiveSpeed, settings.audioReactivePixels, settings.pixelationEnabled]);
   
   const distortionTypes = [
     { value: 'liquify', label: 'Liquify Flow' },
@@ -143,21 +154,21 @@ export default function PixelMoireGenerator() {
           setMidLevel(midAvg);
           setHighLevel(highAvg);
           
-          const sensitivity = settings.audioSensitivity;
+          const sensitivity = sensitivityRef.current;
           const amplifiedLevel = Math.min(normalizedLevel * sensitivity, 1);
           const amplifiedBass = Math.min(bassAvg * sensitivity, 1);
           
           // Set target values - will be smoothly interpolated in render
-          if (settings.audioReactiveSpeed) {
+          if (audioReactiveSpeedRef.current) {
             targetSpeedMultiplier.current = 0.2 + amplifiedLevel * 2.8;
           } else {
             targetSpeedMultiplier.current = 1;
           }
           
-          if (settings.audioReactivePixels && settings.pixelationEnabled) {
+          if (audioReactivePixelsRef.current && pixelationEnabledRef.current) {
             targetPixelSize.current = 4 + amplifiedBass * 2;
           } else {
-            targetPixelSize.current = settings.pixelSize;
+            targetPixelSize.current = 4;
           }
           
           audioFrameRef.current = requestAnimationFrame(updateAudio);
