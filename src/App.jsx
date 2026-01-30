@@ -25,9 +25,12 @@ export default function PixelMoireGenerator() {
   });
 
   const distortionTypes = [
-    { value: 'liquify', label: 'Liquify' },
-    { value: 'ripple', label: 'Ripple' },
-    { value: 'swirl', label: 'Swirl' }
+    { value: 'liquify', label: 'Liquify Flow' },
+    { value: 'ripple', label: 'Ripple Waves' },
+    { value: 'swirl', label: 'Swirl Vortex' },
+    { value: 'turbulence', label: 'Turbulence' },
+    { value: 'marble', label: 'Marble Veins' },
+    { value: 'wave', label: 'Wave Field' }
   ];
 
   // Audio setup
@@ -75,21 +78,63 @@ export default function PixelMoireGenerator() {
     initAudio();
   }, [audioEnabled]);
 
-  // Simple noise
+  // Proper noise function
   const noise = (() => {
     const p = [];
-    for (let i = 0; i < 256; i++) p[i] = Math.random();
+    for (let i = 0; i < 512; i++) p[i] = Math.floor(Math.random() * 256);
     return (x, y) => {
       const X = Math.floor(x) & 255;
       const Y = Math.floor(y) & 255;
-      return p[(X + Y) & 255];
+      x -= Math.floor(x);
+      y -= Math.floor(y);
+      const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+      const u = fade(x);
+      const v = fade(y);
+      const A = p[X] + Y;
+      const B = p[X + 1] + Y;
+      const lerp = (t, a, b) => a + t * (b - a);
+      return lerp(v, lerp(u, p[A] / 128 - 1, p[B] / 128 - 1), lerp(u, p[A + 1] / 128 - 1, p[B + 1] / 128 - 1));
     };
   })();
 
-  const getDistortion = (x, y, time, strength) => {
+  const getDistortion = (x, y, time, strength, type) => {
+    const freq = 0.01;
     const t = time || 0;
-    const dx = noise(x * 0.01 + t * 0.1, y * 0.01) * strength;
-    const dy = noise(x * 0.01 + 100, y * 0.01 + 100 + t * 0.1) * strength;
+    let dx = 0, dy = 0;
+    
+    switch (type) {
+      case 'liquify':
+        dx = noise(x * freq + t * 0.1, y * freq) * strength;
+        dy = noise(x * freq + 100, y * freq + 100 + t * 0.1) * strength;
+        break;
+      case 'ripple':
+        const dist = Math.sqrt(x * x + y * y);
+        const ripple = Math.sin(dist * 0.02 + t * 2) * strength;
+        dx = (x / (dist || 1)) * ripple;
+        dy = (y / (dist || 1)) * ripple;
+        break;
+      case 'swirl':
+        const angle = Math.atan2(y, x);
+        const radius = Math.sqrt(x * x + y * y);
+        const newAngle = angle + (strength * 0.001 + t * 0.5) * (1 / (1 + radius * 0.01));
+        dx = Math.cos(newAngle) * radius - x;
+        dy = Math.sin(newAngle) * radius - y;
+        break;
+      case 'turbulence':
+        dx = Math.abs(noise(x * freq + t * 0.2, y * freq)) * strength;
+        dy = Math.abs(noise(x * freq + 200, y * freq + 200 + t * 0.2)) * strength;
+        break;
+      case 'marble':
+        const m1 = x * freq + strength * 0.1 * noise(x * freq * 2 + t * 0.1, y * freq * 2);
+        const m2 = y * freq + strength * 0.1 * noise(x * freq * 2 + 100, y * freq * 2 + 100 + t * 0.1);
+        dx = Math.sin(m1 + t * 0.5) * strength;
+        dy = Math.sin(m2 + t * 0.5) * strength;
+        break;
+      case 'wave':
+        dx = Math.sin(y * freq * 5 + t * 2) * strength;
+        dy = Math.cos(x * freq * 3 + t * 1.5) * strength;
+        break;
+    }
     return { x: dx, y: dy };
   };
 
@@ -114,7 +159,7 @@ export default function PixelMoireGenerator() {
         for (let y = 0; y < height; y++) {
           let drawX = x, drawY = y;
           if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength);
+            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
             drawX += d.x;
             drawY += d.y;
           }
@@ -123,6 +168,31 @@ export default function PixelMoireGenerator() {
         }
         ctx.lineWidth = settings.lineThickness;
         ctx.stroke();
+      }
+    } else if (settings.patternType === 'horizontal-lines') {
+      for (let y = 0; y < height; y += settings.spacing) {
+        ctx.beginPath();
+        for (let x = 0; x < width; x++) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          if (x === 0) ctx.moveTo(drawX, drawY);
+          else ctx.lineTo(drawX, drawY);
+        }
+        ctx.lineWidth = settings.lineThickness;
+        ctx.stroke();
+      }
+    } else if (settings.patternType === 'checkerboard') {
+      const cellSize = settings.spacing;
+      for (let y = 0; y < height; y += cellSize) {
+        for (let x = 0; x < width; x += cellSize) {
+          if ((Math.floor(x / cellSize) + Math.floor(y / cellSize)) % 2 === 0) {
+            ctx.fillRect(x, y, cellSize, cellSize);
+          }
+        }
       }
     }
     
@@ -222,6 +292,11 @@ export default function PixelMoireGenerator() {
 
         <div>
           <h3 className="font-semibold mb-2">Pattern</h3>
+          <select value={settings.patternType} onChange={(e) => setSettings(s => ({ ...s, patternType: e.target.value }))} className="w-full p-2 border rounded mb-2 text-sm">
+            <option value="vertical-lines">Vertical</option>
+            <option value="horizontal-lines">Horizontal</option>
+            <option value="checkerboard">Checkerboard</option>
+          </select>
           <label className="block text-sm mb-1">Thickness: {settings.lineThickness.toFixed(1)}</label>
           <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(s => ({ ...s, lineThickness: parseFloat(e.target.value) }))} className="w-full mb-2" />
           <label className="block text-sm mb-1">Spacing: {settings.spacing.toFixed(1)}</label>
@@ -236,6 +311,9 @@ export default function PixelMoireGenerator() {
           </label>
           {settings.distortionEnabled && (
             <div className="space-y-2">
+              <select value={settings.distortionType} onChange={(e) => setSettings(s => ({ ...s, distortionType: e.target.value }))} className="w-full p-2 border rounded text-sm">
+                {distortionTypes.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
               <label className="block text-sm mb-1">Strength: {settings.distortionStrength}</label>
               <input type="range" min="5" max="80" value={settings.distortionStrength} onChange={(e) => setSettings(s => ({ ...s, distortionStrength: parseInt(e.target.value) }))} className="w-full" />
               <label className="block text-sm mb-1">Base Speed: {settings.distortionSpeed}</label>
