@@ -64,8 +64,13 @@ export default function PixelMoireGenerator() {
           setAudioLevel(overall);
           setBassLevel(bassAvg);
           
-          // DIRECT speed control - no smoothing, no refs, just set it
-          speedMultiplier.current = 0.1 + (overall * settings.audioSensitivity * 10);
+          // Smooth speed control: 0.01x (frozen) to 5x (fast)
+          // Use exponential curve for smoother feel
+          const rawSpeed = overall * settings.audioSensitivity;
+          const targetSpeed = 0.01 + (rawSpeed * rawSpeed * 5); // Exponential for smoothness
+          
+          // Smooth interpolation
+          speedMultiplier.current = speedMultiplier.current + (targetSpeed - speedMultiplier.current) * 0.1;
           
           requestAnimationFrame(updateAudio);
         };
@@ -278,9 +283,10 @@ export default function PixelMoireGenerator() {
           {audioEnabled && (
             <div className="space-y-2">
               <div>
-                <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(1)}x</label>
-                <input type="range" min="0.1" max="5" step="0.1" value={settings.audioSensitivity} 
+                <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(2)}x</label>
+                <input type="range" min="0.01" max="2" step="0.01" value={settings.audioSensitivity} 
                        onChange={(e) => setSettings(s => ({ ...s, audioSensitivity: parseFloat(e.target.value) }))} className="w-full" />
+                <div className="text-xs text-gray-500 mt-1">Low = frozen, High = fast</div>
               </div>
               <div className="text-xs">Level: {(audioLevel * 100).toFixed(0)}%</div>
               <div className="w-full bg-gray-200 rounded h-2">
