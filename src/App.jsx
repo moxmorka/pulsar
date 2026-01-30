@@ -256,19 +256,20 @@ export default function PixelMoireGenerator() {
     const deltaTime = time - lastFrameTime.current;
     lastFrameTime.current = time;
     
-    // Smooth interpolation for audio reactivity
-    const speedDiff = targetSpeedMultiplier.current - audioTimeMultiplier;
+    // Accumulate time with speed multiplier - use target directly for instant response
+    const currentSpeedMultiplier = targetSpeedMultiplier.current;
+    accumulatedTime.current += deltaTime * currentSpeedMultiplier;
+    
+    // Update display value with smoothing
+    const speedDiff = currentSpeedMultiplier - audioTimeMultiplier;
     if (Math.abs(speedDiff) > 0.01) {
-      setAudioTimeMultiplier(audioTimeMultiplier + speedDiff * 0.1);
+      setAudioTimeMultiplier(audioTimeMultiplier + speedDiff * 0.2);
     }
     
     let currentPixelSize = settings.pixelSize;
     if (settings.audioReactivePixels && settings.pixelationEnabled) {
       currentPixelSize = settings.pixelSize + (targetPixelSize.current - settings.pixelSize) * 0.1;
     }
-    
-    // Accumulate time with speed multiplier
-    accumulatedTime.current += deltaTime * audioTimeMultiplier;
     
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
