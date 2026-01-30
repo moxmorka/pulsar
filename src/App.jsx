@@ -17,6 +17,7 @@ export default function PixelMoireGenerator() {
   const [highLevel, setHighLevel] = useState(0);
   const [audioTimeMultiplier, setAudioTimeMultiplier] = useState(1);
   const lastPixelUpdate = useRef(0);
+  const lastSpeedUpdate = useRef(0);
   const audioFrameRef = useRef(null);
 
   const [settings, setSettings] = useState({
@@ -139,22 +140,23 @@ export default function PixelMoireGenerator() {
           setMidLevel(midAvg);
           setHighLevel(highAvg);
           
+          const now = Date.now();
           const sensitivity = settings.audioSensitivity;
           const amplifiedLevel = Math.min(normalizedLevel * sensitivity, 1);
           const amplifiedBass = Math.min(bassAvg * sensitivity, 1);
           
-          if (settings.audioReactiveSpeed) {
+          // Update speed max 10 times per second
+          if (settings.audioReactiveSpeed && now - lastSpeedUpdate.current > 100) {
             setAudioTimeMultiplier(0.2 + amplifiedLevel * 2.8);
-          } else {
+            lastSpeedUpdate.current = now;
+          } else if (!settings.audioReactiveSpeed) {
             setAudioTimeMultiplier(1);
           }
           
-          if (settings.audioReactivePixels && settings.pixelationEnabled) {
-            const now = Date.now();
-            if (now - lastPixelUpdate.current > 100) {
-              setSettings(prev => ({ ...prev, pixelSize: Math.round(4 + amplifiedBass * 2) }));
-              lastPixelUpdate.current = now;
-            }
+          // Update pixels max 10 times per second
+          if (settings.audioReactivePixels && settings.pixelationEnabled && now - lastPixelUpdate.current > 100) {
+            setSettings(prev => ({ ...prev, pixelSize: Math.round(4 + amplifiedBass * 2) }));
+            lastPixelUpdate.current = now;
           }
           
           audioFrameRef.current = requestAnimationFrame(updateAudio);
