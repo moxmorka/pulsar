@@ -87,14 +87,18 @@ export default function PixelMoireGenerator() {
   useEffect(() => {
     if (!audioEnabled) {
       if (audioFrameRef.current) cancelAnimationFrame(audioFrameRef.current);
-      if (audioContextRef.current) audioContextRef.current.close();
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+      }
       setAudioTimeMultiplier(1);
       return;
     }
 
     const initAudio = async () => {
       try {
-        if (audioContextRef.current) await audioContextRef.current.close();
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+          await audioContextRef.current.close();
+        }
         
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -166,7 +170,11 @@ export default function PixelMoireGenerator() {
     };
 
     initAudio();
-  }, [audioEnabled, selectedAudioDevice, settings.audioReactiveSpeed, settings.audioReactivePixels, settings.pixelationEnabled, settings.audioSensitivity]);
+    
+    return () => {
+      if (audioFrameRef.current) cancelAnimationFrame(audioFrameRef.current);
+    };
+  }, [audioEnabled, selectedAudioDevice]);
 
   const noise = (() => {
     const p = [];
@@ -231,11 +239,18 @@ export default function PixelMoireGenerator() {
     const width = canvas.width;
     const height = canvas.height;
     
-    // Smooth interpolation for audio reactivity
-    const currentSpeed = audioTimeMultiplier + (targetSpeedMultiplier.current - audioTimeMultiplier) * 0.1;
-    setAudioTimeMultiplier(currentSpeed);
+    // Smooth interpolation for audio reactivity (only during render, not state updates)
+    let currentSpeed = audioTimeMultiplier;
+    const speedDiff = targetSpeedMultiplier.current - audioTimeMultiplier;
+    if (Math.abs(speedDiff) > 0.01) {
+      currentSpeed = audioTimeMultiplier + speedDiff * 0.1;
+      setAudioTimeMultiplier(currentSpeed);
+    }
     
-    const currentPixelSize = settings.pixelSize + (targetPixelSize.current - settings.pixelSize) * 0.1;
+    let currentPixelSize = settings.pixelSize;
+    if (settings.audioReactivePixels && settings.pixelationEnabled) {
+      currentPixelSize = settings.pixelSize + (targetPixelSize.current - settings.pixelSize) * 0.1;
+    }
     
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
