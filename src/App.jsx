@@ -239,12 +239,10 @@ export default function PixelMoireGenerator() {
     const width = canvas.width;
     const height = canvas.height;
     
-    // Smooth interpolation for audio reactivity (only during render, not state updates)
-    let currentSpeed = audioTimeMultiplier;
+    // Smooth interpolation for audio reactivity
     const speedDiff = targetSpeedMultiplier.current - audioTimeMultiplier;
     if (Math.abs(speedDiff) > 0.01) {
-      currentSpeed = audioTimeMultiplier + speedDiff * 0.1;
-      setAudioTimeMultiplier(currentSpeed);
+      setAudioTimeMultiplier(audioTimeMultiplier + speedDiff * 0.1);
     }
     
     let currentPixelSize = settings.pixelSize;
@@ -256,7 +254,7 @@ export default function PixelMoireGenerator() {
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
     
-    const animTime = isAnimating ? time * 0.001 * settings.distortionSpeed * currentSpeed : 0;
+    const animTime = isAnimating ? time * 0.001 * settings.distortionSpeed * audioTimeMultiplier : 0;
     
     if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
