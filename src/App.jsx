@@ -4,7 +4,6 @@ import { Play, Pause, RotateCcw, Download, Type, Grid } from 'lucide-react';
 export default function PixelMoireGenerator() {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
-  const [isAnimating, setIsAnimating] = useState(false);
   const [customFonts, setCustomFonts] = useState([]);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [audioDevices, setAudioDevices] = useState([]);
@@ -265,7 +264,7 @@ export default function PixelMoireGenerator() {
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
     
-    const animTime = isAnimating ? time * 0.001 * settings.distortionSpeed * audioTimeMultiplier : 0;
+    const animTime = time * 0.001 * settings.distortionSpeed * audioTimeMultiplier;
     
     if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
@@ -345,7 +344,7 @@ export default function PixelMoireGenerator() {
     };
     animationRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [isAnimating, settings]);
+  }, [settings]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -364,16 +363,13 @@ export default function PixelMoireGenerator() {
     <div className="w-full h-screen bg-gray-100 flex">
       <div className="w-80 bg-white shadow-lg p-4 overflow-y-auto space-y-4">
         <div className="flex gap-2">
-          <button onClick={() => setIsAnimating(!isAnimating)} className="flex items-center gap-1 px-3 py-2 bg-blue-500 text-white rounded text-sm">
-            {isAnimating ? <Pause size={14} /> : <Play size={14} />}
-          </button>
           <button onClick={() => setSettings(s => ({ ...s, lineThickness: Math.random() * 15 + 5, spacing: Math.random() * 30 + 15 }))} 
                   className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
-            <RotateCcw size={14} />
+            <RotateCcw size={14} /> Random
           </button>
           <button onClick={() => { const canvas = canvasRef.current; const link = document.createElement('a'); link.download = 'pattern.png'; link.href = canvas.toDataURL(); link.click(); }} 
                   className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
-            <Download size={14} />
+            <Download size={14} /> Save
           </button>
         </div>
 
