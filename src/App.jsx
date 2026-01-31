@@ -10,6 +10,7 @@ export default function PixelMoireGenerator() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [bassLevel, setBassLevel] = useState(0);
   const distortionMultiplier = useRef(1);
+  const sensitivityRef = useRef(2);
 
   const [settings, setSettings] = useState({
     patternType: 'vertical-lines',
@@ -66,7 +67,7 @@ export default function PixelMoireGenerator() {
           
           // Control distortion INTENSITY (how much it wobbles), not speed
           // Range: 0.1x (barely moving) to 3x (intense wobble)
-          const targetIntensity = 0.1 + (overall * settings.audioSensitivity * 3);
+          const targetIntensity = 0.1 + (overall * sensitivityRef.current * 3);
           
           // Smooth interpolation
           distortionMultiplier.current = distortionMultiplier.current + (targetIntensity - distortionMultiplier.current) * 0.1;
@@ -289,7 +290,12 @@ export default function PixelMoireGenerator() {
               <div>
                 <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(2)}x</label>
                 <input type="range" min="0.1" max="3" step="0.1" value={settings.audioSensitivity} 
-                       onChange={(e) => setSettings(s => ({ ...s, audioSensitivity: parseFloat(e.target.value) }))} className="w-full" />
+                       onChange={(e) => {
+                         const val = parseFloat(e.target.value);
+                         setSettings(s => ({ ...s, audioSensitivity: val }));
+                         sensitivityRef.current = val;
+                       }} 
+                       className="w-full" />
                 <div className="text-xs text-gray-500 mt-1">Controls distortion intensity</div>
               </div>
               <div className="text-xs">Level: {(audioLevel * 100).toFixed(0)}%</div>
