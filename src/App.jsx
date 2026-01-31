@@ -108,35 +108,37 @@ export default function PixelMoireGenerator() {
     
     switch (type) {
       case 'liquify':
-        dx = noise(x * freq + t * 0.1, y * freq) * strength;
+        // Forward flowing noise
+        dx = noise(x * freq, y * freq + t * 0.1) * strength;
         dy = noise(x * freq + 100, y * freq + 100 + t * 0.1) * strength;
         break;
       case 'ripple':
         const dist = Math.sqrt(x * x + y * y);
-        const ripple = Math.sin(dist * 0.02 + t * 2) * strength;
+        const ripple = Math.sin(dist * 0.02 - t * 2) * strength; // Negative t for outward flow
         dx = (x / (dist || 1)) * ripple;
         dy = (y / (dist || 1)) * ripple;
         break;
       case 'swirl':
         const angle = Math.atan2(y, x);
         const radius = Math.sqrt(x * x + y * y);
-        const newAngle = angle + (strength * 0.001 + t * 0.5) * (1 / (1 + radius * 0.01));
+        const swirlAmount = (strength * 0.001) * (1 / (1 + radius * 0.01));
+        const newAngle = angle + swirlAmount + t * 0.5; // Forward rotation
         dx = Math.cos(newAngle) * radius - x;
         dy = Math.sin(newAngle) * radius - y;
         break;
       case 'turbulence':
-        dx = Math.abs(noise(x * freq + t * 0.2, y * freq)) * strength;
-        dy = Math.abs(noise(x * freq + 200, y * freq + 200 + t * 0.2)) * strength;
+        dx = noise(x * freq, y * freq + t * 0.2) * strength;
+        dy = noise(x * freq + 200, y * freq + 200 + t * 0.2) * strength;
         break;
       case 'marble':
-        const m1 = x * freq + strength * 0.1 * noise(x * freq * 2 + t * 0.1, y * freq * 2);
+        const m1 = x * freq + strength * 0.1 * noise(x * freq * 2, y * freq * 2 + t * 0.1);
         const m2 = y * freq + strength * 0.1 * noise(x * freq * 2 + 100, y * freq * 2 + 100 + t * 0.1);
         dx = Math.sin(m1 + t * 0.5) * strength;
         dy = Math.sin(m2 + t * 0.5) * strength;
         break;
       case 'wave':
-        dx = Math.sin(y * freq * 5 + t * 2) * strength;
-        dy = Math.cos(x * freq * 3 + t * 1.5) * strength;
+        dx = Math.sin(y * freq * 5 - t * 2) * strength; // Forward wave
+        dy = Math.cos(x * freq * 3 - t * 1.5) * strength;
         break;
     }
     return { x: dx, y: dy };
