@@ -67,12 +67,13 @@ export default function PixelMoireGenerator() {
           setAudioLevel(overall);
           setBassLevel(bassAvg);
           
-          // Control distortion INTENSITY (how much it wobbles)
-          const targetIntensity = 0.1 + (overall * sensitivityRef.current * 3);
+          // SUBTLE changes - keep the base motion feel
+          // Intensity: 1.0x (no change) to 2.0x (bit more intricate)
+          const targetIntensity = 1.0 + (overall * sensitivityRef.current * 0.5);
           distortionMultiplier.current = distortionMultiplier.current + (targetIntensity - distortionMultiplier.current) * 0.1;
           
-          // Control SPEED (how fast it flows)
-          const targetSpeed = 0.5 + (overall * sensitivityRef.current * 2);
+          // Speed: 1.0x (base speed) to 2.0x (faster)
+          const targetSpeed = 1.0 + (overall * sensitivityRef.current * 0.5);
           speedMultiplier.current = speedMultiplier.current + (targetSpeed - speedMultiplier.current) * 0.1;
           
           requestAnimationFrame(updateAudio);
