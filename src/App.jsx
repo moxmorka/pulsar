@@ -10,6 +10,7 @@ export default function PixelMoireGenerator() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [bassLevel, setBassLevel] = useState(0);
   const distortionMultiplier = useRef(1);
+  const speedMultiplier = useRef(1);
   const sensitivityRef = useRef(2);
 
   const [settings, setSettings] = useState({
@@ -39,6 +40,7 @@ export default function PixelMoireGenerator() {
     if (!audioEnabled) {
       if (audioContextRef.current) audioContextRef.current.close();
       distortionMultiplier.current = 1;
+      speedMultiplier.current = 1;
       return;
     }
 
@@ -65,12 +67,13 @@ export default function PixelMoireGenerator() {
           setAudioLevel(overall);
           setBassLevel(bassAvg);
           
-          // Control distortion INTENSITY (how much it wobbles), not speed
-          // Range: 0.1x (barely moving) to 3x (intense wobble)
+          // Control distortion INTENSITY (how much it wobbles)
           const targetIntensity = 0.1 + (overall * sensitivityRef.current * 3);
-          
-          // Smooth interpolation
           distortionMultiplier.current = distortionMultiplier.current + (targetIntensity - distortionMultiplier.current) * 0.1;
+          
+          // Control SPEED (how fast it flows)
+          const targetSpeed = 0.5 + (overall * sensitivityRef.current * 2);
+          speedMultiplier.current = speedMultiplier.current + (targetSpeed - speedMultiplier.current) * 0.1;
           
           requestAnimationFrame(updateAudio);
         };
@@ -162,8 +165,8 @@ export default function PixelMoireGenerator() {
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
     
-    // CONTINUOUS forward motion (always flows)
-    const animTime = time * 0.001 * settings.distortionSpeed;
+    // CONTINUOUS forward motion - audio controls BOTH speed and intensity
+    const animTime = time * 0.001 * settings.distortionSpeed * speedMultiplier.current;
     
     // Audio controls distortion STRENGTH, not time
     const audioDistortionStrength = settings.distortionStrength * distortionMultiplier.current;
@@ -212,11 +215,11 @@ export default function PixelMoireGenerator() {
       }
     }
     
-    // Pixelation
-    if (settings.pixelationEnabled && settings.pixelSize > 1) {
+    // Pixelation with bass control
+    if (settings.pixelationEnabled) {
+      const pixelSize = Math.round(settings.pixelSize + (bassLevel * sensitivityRef.current * 4));
       const imageData = ctx.getImageData(0, 0, width, height);
       const pixelated = ctx.createImageData(width, height);
-      const pixelSize = Math.round(4 + bassLevel * settings.audioSensitivity);
       for (let y = 0; y < height; y += pixelSize) {
         for (let x = 0; x < width; x += pixelSize) {
           const sampleX = Math.min(x + Math.floor(pixelSize / 2), width - 1);
@@ -282,6 +285,7 @@ export default function PixelMoireGenerator() {
           <div>Audio: {audioLevel.toFixed(3)}</div>
           <div>Bass: {bassLevel.toFixed(3)}</div>
           <div>Intensity: {distortionMultiplier.current.toFixed(2)}x</div>
+          <div>Speed: {speedMultiplier.current.toFixed(2)}x</div>
         </div>
 
         <div>
@@ -348,8 +352,13 @@ export default function PixelMoireGenerator() {
           <h3 className="font-semibold mb-2">Pixelation</h3>
           <label className="flex items-center mb-2">
             <input type="checkbox" checked={settings.pixelationEnabled} onChange={(e) => setSettings(s => ({ ...s, pixelationEnabled: e.target.checked }))} className="mr-2" />
-            Enable (Bass Reactive)
+            Enable Bass Reactive
           </label>
+          <div>
+            <label className="block text-sm mb-1">Base Size: {settings.pixelSize}</label>
+            <input type="range" min="2" max="12" value={settings.pixelSize} onChange={(e) => setSettings(s => ({ ...s, pixelSize: parseInt(e.target.value) }))} className="w-full" />
+            <div className="text-xs text-gray-500 mt-1">Bass adds extra pixelation when enabled</div>
+          </div>
         </div>
       </div>
 
