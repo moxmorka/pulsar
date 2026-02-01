@@ -23,7 +23,12 @@ export default function PixelMoireGenerator() {
     distortionSpeed: 1,
     pixelationEnabled: false,
     pixelSize: 4,
-    audioSensitivity: 2
+    audioSensitivity: 2,
+    dotSize: 8,
+    shapeSize: 10,
+    text: 'SOUND',
+    font: 'Impact',
+    fontSize: 40
   });
 
   const distortionTypes = [
@@ -34,6 +39,25 @@ export default function PixelMoireGenerator() {
     { value: 'marble', label: 'Marble Veins' },
     { value: 'wave', label: 'Wave Field' }
   ];
+
+  const googleFonts = [
+    'Impact',
+    'Roboto',
+    'Open Sans',
+    'Montserrat',
+    'Bebas Neue',
+    'Anton',
+    'Pacifico',
+    'Lobster'
+  ];
+
+  // Load Google Fonts
+  useEffect(() => {
+    const link = document.createElement('link');
+    link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@900&family=Open+Sans:wght@800&family=Montserrat:wght@900&family=Bebas+Neue&family=Anton&family=Pacifico&family=Lobster&display=swap';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+  }, []);
 
   // Audio setup
   useEffect(() => {
@@ -171,9 +195,80 @@ export default function PixelMoireGenerator() {
     
     // Audio controls distortion STRENGTH, not time
     const audioDistortionStrength = settings.distortionStrength * distortionMultiplier.current;
+    const audioDotSize = settings.dotSize * (1 + bassLevel * sensitivityRef.current * 0.5);
+    const audioShapeSize = settings.shapeSize * (1 + bassLevel * sensitivityRef.current * 0.5);
     
-    // Draw pattern
-    if (settings.patternType === 'vertical-lines') {
+    // Draw pattern based on type
+    if (settings.patternType === 'dots') {
+      ctx.fillStyle = '#000000';
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          ctx.beginPath();
+          ctx.arc(drawX, drawY, audioDotSize, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    } else if (settings.patternType === 'squares') {
+      ctx.fillStyle = '#000000';
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          const halfSize = audioShapeSize / 2;
+          ctx.fillRect(drawX - halfSize, drawY - halfSize, audioShapeSize, audioShapeSize);
+        }
+      }
+    } else if (settings.patternType === 'triangles') {
+      ctx.fillStyle = '#000000';
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          ctx.beginPath();
+          ctx.moveTo(drawX, drawY - audioShapeSize);
+          ctx.lineTo(drawX + audioShapeSize, drawY + audioShapeSize);
+          ctx.lineTo(drawX - audioShapeSize, drawY + audioShapeSize);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    } else if (settings.patternType === 'text') {
+      ctx.fillStyle = '#000000';
+      ctx.font = `${settings.fontSize}px "${settings.font}", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const textWidth = ctx.measureText(settings.text).width;
+      const charSpacing = settings.spacing;
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          ctx.save();
+          ctx.translate(drawX, drawY);
+          ctx.scale(1 + bassLevel * sensitivityRef.current * 0.3, 1 + bassLevel * sensitivityRef.current * 0.3);
+          ctx.fillText(settings.text, 0, 0);
+          ctx.restore();
+        }
+      }
+    } else if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
         ctx.beginPath();
         for (let y = 0; y < height; y++) {
@@ -320,12 +415,55 @@ export default function PixelMoireGenerator() {
         <div>
           <h3 className="font-semibold mb-2">Pattern</h3>
           <select value={settings.patternType} onChange={(e) => setSettings(s => ({ ...s, patternType: e.target.value }))} className="w-full p-2 border rounded mb-2 text-sm">
-            <option value="vertical-lines">Vertical</option>
-            <option value="horizontal-lines">Horizontal</option>
+            <option value="vertical-lines">Vertical Lines</option>
+            <option value="horizontal-lines">Horizontal Lines</option>
             <option value="checkerboard">Checkerboard</option>
+            <option value="dots">Dots</option>
+            <option value="squares">Squares</option>
+            <option value="triangles">Triangles</option>
+            <option value="text">Text</option>
           </select>
-          <label className="block text-sm mb-1">Thickness: {settings.lineThickness.toFixed(1)}</label>
-          <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(s => ({ ...s, lineThickness: parseFloat(e.target.value) }))} className="w-full mb-2" />
+          
+          {(settings.patternType === 'vertical-lines' || settings.patternType === 'horizontal-lines') && (
+            <div>
+              <label className="block text-sm mb-1">Thickness: {settings.lineThickness.toFixed(1)}</label>
+              <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(s => ({ ...s, lineThickness: parseFloat(e.target.value) }))} className="w-full mb-2" />
+            </div>
+          )}
+          
+          {settings.patternType === 'dots' && (
+            <div>
+              <label className="block text-sm mb-1">Dot Size: {settings.dotSize.toFixed(1)}</label>
+              <input type="range" min="2" max="20" value={settings.dotSize} onChange={(e) => setSettings(s => ({ ...s, dotSize: parseFloat(e.target.value) }))} className="w-full mb-2" />
+            </div>
+          )}
+          
+          {(settings.patternType === 'squares' || settings.patternType === 'triangles') && (
+            <div>
+              <label className="block text-sm mb-1">Shape Size: {settings.shapeSize.toFixed(1)}</label>
+              <input type="range" min="4" max="30" value={settings.shapeSize} onChange={(e) => setSettings(s => ({ ...s, shapeSize: parseFloat(e.target.value) }))} className="w-full mb-2" />
+            </div>
+          )}
+          
+          {settings.patternType === 'text' && (
+            <div className="space-y-2">
+              <div>
+                <label className="block text-sm mb-1">Text</label>
+                <input type="text" value={settings.text} onChange={(e) => setSettings(s => ({ ...s, text: e.target.value }))} className="w-full p-2 border rounded text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Font</label>
+                <select value={settings.font} onChange={(e) => setSettings(s => ({ ...s, font: e.target.value }))} className="w-full p-2 border rounded text-sm">
+                  {googleFonts.map(font => <option key={font} value={font}>{font}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Font Size: {settings.fontSize}</label>
+                <input type="range" min="20" max="100" value={settings.fontSize} onChange={(e) => setSettings(s => ({ ...s, fontSize: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+            </div>
+          )}
+          
           <label className="block text-sm mb-1">Spacing: {settings.spacing.toFixed(1)}</label>
           <input type="range" min="10" max="60" value={settings.spacing} onChange={(e) => setSettings(s => ({ ...s, spacing: parseFloat(e.target.value) }))} className="w-full" />
         </div>
