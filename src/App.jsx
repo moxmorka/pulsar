@@ -1,19 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import { RotateCcw, Download } from 'lucide-react';
 
-export default function PixelMoireGenerator() {
-  const canvasRef = useRef(null);
-  const animationRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const analyserRef = useRef(null);
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [bassLevel, setBassLevel] = useState(0);
-  const distortionMultiplier = useRef(1);
-  const speedMultiplier = useRef(1);
-  const sensitivityRef = useRef(2);
+const PixelMoireGenerator = () => {
+  const canvasRef = React.useRef(null);
+  const animationRef = React.useRef(null);
+  const audioContextRef = React.useRef(null);
+  const analyserRef = React.useRef(null);
+  const distortionMultiplier = React.useRef(1);
+  const speedMultiplier = React.useRef(1);
+  const sensitivityRef = React.useRef(2);
+  const svgImageRef = React.useRef(null);
 
-  const [settings, setSettings] = useState({
+  const [audioEnabled, setAudioEnabled] = React.useState(false);
+  const [audioLevel, setAudioLevel] = React.useState(0);
+  const [bassLevel, setBassLevel] = React.useState(0);
+  const [customSvg, setCustomSvg] = React.useState(null);
+  const [customFont, setCustomFont] = React.useState(null);
+
+  const [settings, setSettings] = React.useState({
     patternType: 'vertical-lines',
     lineThickness: 10,
     spacing: 20,
@@ -28,7 +32,8 @@ export default function PixelMoireGenerator() {
     shapeSize: 10,
     text: 'SOUND',
     font: 'Impact',
-    fontSize: 40
+    fontSize: 40,
+    customSvgScale: 1
   });
 
   const distortionTypes = [
@@ -40,34 +45,57 @@ export default function PixelMoireGenerator() {
     { value: 'wave', label: 'Wave Field' }
   ];
 
-  const googleFonts = [
-    'Impact',
-    'Roboto',
-    'Open Sans',
-    'Montserrat',
-    'Bebas Neue',
-    'Anton',
-    'Pacifico',
-    'Lobster'
-  ];
+  const googleFonts = ['Impact', 'Roboto', 'Open Sans', 'Montserrat', 'Bebas Neue', 'Anton', 'Pacifico', 'Lobster'];
 
-  // Load Google Fonts
-  useEffect(() => {
+  React.useEffect(() => {
     const link = document.createElement('link');
     link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@900&family=Open+Sans:wght@800&family=Montserrat:wght@900&family=Bebas+Neue&family=Anton&family=Pacifico&family=Lobster&display=swap';
     link.rel = 'stylesheet';
     document.head.appendChild(link);
   }, []);
 
-  // Audio setup
-  useEffect(() => {
+  const handleSvgUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const svgText = event.target.result;
+      const img = new Image();
+      const blob = new Blob([svgText], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      img.onload = () => {
+        svgImageRef.current = img;
+        setCustomSvg(url);
+        setSettings(s => ({ ...s, patternType: 'custom-svg' }));
+      };
+      img.src = url;
+    };
+    reader.readAsText(file);
+  };
+
+  const handleFontUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const fontName = 'CustomFont';
+      const fontFace = new FontFace(fontName, `url(${event.target.result})`);
+      fontFace.load().then((loadedFont) => {
+        document.fonts.add(loadedFont);
+        setCustomFont(fontName);
+        setSettings(s => ({ ...s, font: fontName }));
+      }).catch(() => alert('Font loading failed'));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  React.useEffect(() => {
     if (!audioEnabled) {
       if (audioContextRef.current) audioContextRef.current.close();
       distortionMultiplier.current = 1;
       speedMultiplier.current = 1;
       return;
     }
-
     const initAudio = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -78,40 +106,29 @@ export default function PixelMoireGenerator() {
         analyser.fftSize = 2048;
         analyserRef.current = analyser;
         source.connect(analyser);
-
         const updateAudio = () => {
           if (!analyserRef.current) return;
           const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
           analyserRef.current.getByteFrequencyData(dataArray);
-          
           const bass = dataArray.slice(0, 50);
           const bassAvg = bass.reduce((a, b) => a + b, 0) / bass.length / 255;
           const overall = dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
-          
           setAudioLevel(overall);
           setBassLevel(bassAvg);
-          
-          // SUBTLE changes - keep the base motion feel
-          // Intensity: 1.0x (no change) to 2.0x (bit more intricate)
           const targetIntensity = 1.0 + (overall * sensitivityRef.current * 0.5);
           distortionMultiplier.current = distortionMultiplier.current + (targetIntensity - distortionMultiplier.current) * 0.1;
-          
-          // Speed: 1.0x (base speed) to 2.0x (faster)
           const targetSpeed = 1.0 + (overall * sensitivityRef.current * 0.5);
           speedMultiplier.current = speedMultiplier.current + (targetSpeed - speedMultiplier.current) * 0.1;
-          
           requestAnimationFrame(updateAudio);
         };
         updateAudio();
       } catch (err) {
-        alert('Audio failed: ' + err.message);
+        alert('Audio failed');
       }
     };
-
     initAudio();
   }, [audioEnabled]);
 
-  // Proper noise function
   const noise = (() => {
     const p = [];
     for (let i = 0; i < 512; i++) p[i] = Math.floor(Math.random() * 256);
@@ -134,19 +151,13 @@ export default function PixelMoireGenerator() {
     const freq = 0.01;
     const t = time || 0;
     let dx = 0, dy = 0;
-    
-    // Key change: time shifts the SAMPLE POSITION in noise space
-    // This makes the pattern FLOW instead of oscillate
-    
     switch (type) {
       case 'liquify':
-        // Sample from moving position in noise field
         dx = noise((x + t * 50) * freq, y * freq) * strength;
         dy = noise((x + t * 50) * freq + 100, (y + t * 30) * freq + 100) * strength;
         break;
       case 'ripple':
         const dist = Math.sqrt(x * x + y * y);
-        // Expanding ripple that flows outward continuously
         const ripple = Math.sin((dist - t * 50) * 0.02) * strength;
         dx = (x / (dist || 1)) * ripple;
         dy = (y / (dist || 1)) * ripple;
@@ -154,7 +165,6 @@ export default function PixelMoireGenerator() {
       case 'swirl':
         const angle = Math.atan2(y, x);
         const radius = Math.sqrt(x * x + y * y);
-        // Continuous rotation
         const rotation = t * 0.3;
         const newAngle = angle + rotation + (strength * 0.001) * (1 / (1 + radius * 0.01));
         dx = Math.cos(newAngle) * radius - x;
@@ -171,7 +181,6 @@ export default function PixelMoireGenerator() {
         dy = Math.sin(m2) * strength;
         break;
       case 'wave':
-        // Traveling waves
         dx = Math.sin(y * freq * 5 - t * 0.5) * strength;
         dy = Math.cos(x * freq * 3 - t * 0.5) * strength;
         break;
@@ -185,22 +194,15 @@ export default function PixelMoireGenerator() {
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
-    
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
-    
-    // CONTINUOUS forward motion - audio controls BOTH speed and intensity
     const animTime = time * 0.001 * settings.distortionSpeed * speedMultiplier.current;
-    
-    // Audio controls distortion STRENGTH, not time
     const audioDistortionStrength = settings.distortionStrength * distortionMultiplier.current;
     const audioDotSize = settings.dotSize * (1 + bassLevel * sensitivityRef.current * 0.5);
     const audioShapeSize = settings.shapeSize * (1 + bassLevel * sensitivityRef.current * 0.5);
     
-    // Draw pattern based on type
     if (settings.patternType === 'dots') {
-      ctx.fillStyle = '#000000';
       for (let y = 0; y < height; y += settings.spacing) {
         for (let x = 0; x < width; x += settings.spacing) {
           let drawX = x, drawY = y;
@@ -214,8 +216,24 @@ export default function PixelMoireGenerator() {
           ctx.fill();
         }
       }
+    } else if (settings.patternType === 'custom-svg' && svgImageRef.current) {
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          const size = audioShapeSize * settings.customSvgScale;
+          ctx.save();
+          ctx.translate(drawX, drawY);
+          ctx.scale(1 + bassLevel * sensitivityRef.current * 0.3, 1 + bassLevel * sensitivityRef.current * 0.3);
+          ctx.drawImage(svgImageRef.current, -size/2, -size/2, size, size);
+          ctx.restore();
+        }
+      }
     } else if (settings.patternType === 'squares') {
-      ctx.fillStyle = '#000000';
       for (let y = 0; y < height; y += settings.spacing) {
         for (let x = 0; x < width; x += settings.spacing) {
           let drawX = x, drawY = y;
@@ -229,7 +247,6 @@ export default function PixelMoireGenerator() {
         }
       }
     } else if (settings.patternType === 'triangles') {
-      ctx.fillStyle = '#000000';
       for (let y = 0; y < height; y += settings.spacing) {
         for (let x = 0; x < width; x += settings.spacing) {
           let drawX = x, drawY = y;
@@ -247,12 +264,9 @@ export default function PixelMoireGenerator() {
         }
       }
     } else if (settings.patternType === 'text') {
-      ctx.fillStyle = '#000000';
       ctx.font = `${settings.fontSize}px "${settings.font}", sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const textWidth = ctx.measureText(settings.text).width;
-      const charSpacing = settings.spacing;
       for (let y = 0; y < height; y += settings.spacing) {
         for (let x = 0; x < width; x += settings.spacing) {
           let drawX = x, drawY = y;
@@ -311,7 +325,6 @@ export default function PixelMoireGenerator() {
       }
     }
     
-    // Pixelation with bass control
     if (settings.pixelationEnabled) {
       const pixelSize = Math.round(settings.pixelSize + (bassLevel * sensitivityRef.current * 4));
       const imageData = ctx.getImageData(0, 0, width, height);
@@ -340,7 +353,7 @@ export default function PixelMoireGenerator() {
     }
   };
 
-  useEffect(() => {
+  React.useEffect(() => {
     const loop = (time) => {
       render(time);
       animationRef.current = requestAnimationFrame(loop);
@@ -349,7 +362,7 @@ export default function PixelMoireGenerator() {
     return () => cancelAnimationFrame(animationRef.current);
   }, [settings]);
 
-  useEffect(() => {
+  React.useEffect(() => {
     const handleResize = () => {
       const canvas = canvasRef.current;
       if (canvas) {
@@ -366,12 +379,10 @@ export default function PixelMoireGenerator() {
     <div className="w-full h-screen bg-gray-100 flex">
       <div className="w-80 bg-white shadow-lg p-4 overflow-y-auto space-y-4">
         <div className="flex gap-2">
-          <button onClick={() => setSettings(s => ({ ...s, lineThickness: Math.random() * 15 + 5, spacing: Math.random() * 30 + 15 }))} 
-                  className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
+          <button onClick={() => setSettings(s => ({ ...s, lineThickness: Math.random() * 15 + 5, spacing: Math.random() * 30 + 15 }))} className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
             <RotateCcw size={14} /> Random
           </button>
-          <button onClick={() => { const link = document.createElement('a'); link.download = 'pattern.png'; link.href = canvasRef.current.toDataURL(); link.click(); }} 
-                  className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
+          <button onClick={() => { const link = document.createElement('a'); link.download = 'pattern.png'; link.href = canvasRef.current.toDataURL(); link.click(); }} className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
             <Download size={14} /> Save
           </button>
         </div>
@@ -390,18 +401,11 @@ export default function PixelMoireGenerator() {
             <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} className="mr-2" />
             Enable Audio Input
           </label>
-          
           {audioEnabled && (
             <div className="space-y-2">
               <div>
                 <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(2)}x</label>
-                <input type="range" min="0.1" max="3" step="0.1" value={settings.audioSensitivity} 
-                       onChange={(e) => {
-                         const val = parseFloat(e.target.value);
-                         setSettings(s => ({ ...s, audioSensitivity: val }));
-                         sensitivityRef.current = val;
-                       }} 
-                       className="w-full" />
+                <input type="range" min="0.1" max="3" step="0.1" value={settings.audioSensitivity} onChange={(e) => { const val = parseFloat(e.target.value); setSettings(s => ({ ...s, audioSensitivity: val })); sensitivityRef.current = val; }} className="w-full" />
                 <div className="text-xs text-gray-500 mt-1">Controls distortion intensity</div>
               </div>
               <div className="text-xs">Level: {(audioLevel * 100).toFixed(0)}%</div>
@@ -422,7 +426,26 @@ export default function PixelMoireGenerator() {
             <option value="squares">Squares</option>
             <option value="triangles">Triangles</option>
             <option value="text">Text</option>
+            <option value="custom-svg">Custom SVG Shape</option>
           </select>
+          
+          {settings.patternType === 'custom-svg' && (
+            <div className="space-y-2 mb-2">
+              <label className="block">
+                <div className="text-sm mb-1">Upload SVG File</div>
+                <input type="file" accept=".svg" onChange={handleSvgUpload} className="w-full text-xs p-2 border rounded" />
+              </label>
+              {customSvg && (
+                <>
+                  <div className="text-xs text-green-600">✓ SVG loaded</div>
+                  <div>
+                    <label className="block text-sm mb-1">SVG Scale: {settings.customSvgScale.toFixed(1)}x</label>
+                    <input type="range" min="0.5" max="3" step="0.1" value={settings.customSvgScale} onChange={(e) => setSettings(s => ({ ...s, customSvgScale: parseFloat(e.target.value) }))} className="w-full" />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           
           {(settings.patternType === 'vertical-lines' || settings.patternType === 'horizontal-lines') && (
             <div>
@@ -455,7 +478,15 @@ export default function PixelMoireGenerator() {
                 <label className="block text-sm mb-1">Font</label>
                 <select value={settings.font} onChange={(e) => setSettings(s => ({ ...s, font: e.target.value }))} className="w-full p-2 border rounded text-sm">
                   {googleFonts.map(font => <option key={font} value={font}>{font}</option>)}
+                  {customFont && <option value={customFont}>Custom Font</option>}
                 </select>
+              </div>
+              <div>
+                <label className="block">
+                  <div className="text-sm mb-1">Upload Custom Font (.ttf, .otf, .woff)</div>
+                  <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} className="w-full text-xs p-2 border rounded" />
+                </label>
+                {customFont && <div className="text-xs text-green-600">✓ Custom font loaded</div>}
               </div>
               <div>
                 <label className="block text-sm mb-1">Font Size: {settings.fontSize}</label>
@@ -506,4 +537,6 @@ export default function PixelMoireGenerator() {
       </div>
     </div>
   );
-}
+};
+
+export default PixelMoireGenerator;
