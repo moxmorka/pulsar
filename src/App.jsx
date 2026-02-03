@@ -39,10 +39,14 @@ const PixelMoireGenerator = () => {
     charCycleSpeed: 5,
     gridColumns: 8,
     gridRows: 6,
-    gridPreset: 'custom'
+    gridPreset: 'custom',
+    drawMode: false,
+    selectedElement: 'char'
   });
   
   const [gridCells, setGridCells] = React.useState([]);
+  const [contextMenu, setContextMenu] = React.useState(null);
+  const [isDrawing, setIsDrawing] = React.useState(false);
 
   const distortionTypes = [
     { value: 'liquify', label: 'Liquify Flow' },
@@ -67,17 +71,121 @@ const PixelMoireGenerator = () => {
   const generateRandomGrid = () => {
     const cells = [];
     const totalCells = settings.gridColumns * settings.gridRows;
-    const fillRatio = Math.random() * 0.3 + 0.2; // 20-50% filled
-    for (let i = 0; i < totalCells; i++) {
-      if (Math.random() < fillRatio) {
-        cells.push({
-          index: i,
-          type: ['char', 'dot', 'square', 'line'][Math.floor(Math.random() * 4)]
-        });
-      }
+    const numElements = Math.floor(totalCells * (Math.random() * 0.3 + 0.2)); // 20-50% filled
+    const usedIndices = new Set();
+    
+    for (let i = 0; i < numElements; i++) {
+      let index;
+      do {
+        index = Math.floor(Math.random() * totalCells);
+      } while (usedIndices.has(index));
+      
+      usedIndices.add(index);
+      cells.push({
+        index: index,
+        type: ['char', 'dot', 'square', 'line'][Math.floor(Math.random() * 4)]
+      });
     }
     setGridCells(cells);
   };
+  
+  const getCellFromClick = (canvasX, canvasY) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const cellWidth = canvas.width / settings.gridColumns;
+    const cellHeight = canvas.height / settings.gridRows;
+    const col = Math.floor(canvasX / cellWidth);
+    const row = Math.floor(canvasY / cellHeight);
+    if (col >= 0 && col < settings.gridColumns && row >= 0 && row < settings.gridRows) {
+      return row * settings.gridColumns + col;
+    }
+    return null;
+  };
+  
+  const handleCanvasClick = (e) => {
+    if (settings.patternType !== 'swiss-grid') return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = x * scaleX;
+    const canvasY = y * scaleY;
+    const cellIndex = getCellFromClick(canvasX, canvasY);
+    
+    if (cellIndex === null) return;
+    
+    if (settings.drawMode) {
+      // Draw mode - add element directly
+      const existing = gridCells.findIndex(c => c.index === cellIndex);
+      if (existing === -1) {
+        setGridCells([...gridCells, { index: cellIndex, type: settings.selectedElement }]);
+      }
+    } else {
+      // Click mode - show context menu
+      setContextMenu({ x: e.clientX, y: e.clientY, cellIndex });
+    }
+  };
+  
+  const handleCanvasMouseDown = (e) => {
+    if (settings.patternType === 'swiss-grid' && settings.drawMode) {
+      setIsDrawing(true);
+      handleCanvasClick(e);
+    }
+  };
+  
+  const handleCanvasMouseMove = (e) => {
+    if (settings.patternType === 'swiss-grid' && settings.drawMode && isDrawing) {
+      const canvas = canvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const canvasX = x * scaleX;
+      const canvasY = y * scaleY;
+      const cellIndex = getCellFromClick(canvasX, canvasY);
+      
+      if (cellIndex !== null) {
+        const existing = gridCells.findIndex(c => c.index === cellIndex);
+        if (existing === -1) {
+          setGridCells(prev => [...prev, { index: cellIndex, type: settings.selectedElement }]);
+        }
+      }
+    }
+  };
+  
+  const handleCanvasMouseUp = () => {
+    setIsDrawing(false);
+  };
+  
+  const addElement = (type) => {
+    if (contextMenu) {
+      const existing = gridCells.findIndex(c => c.index === contextMenu.cellIndex);
+      if (existing >= 0) {
+        const newCells = [...gridCells];
+        newCells[existing] = { index: contextMenu.cellIndex, type };
+        setGridCells(newCells);
+      } else {
+        setGridCells([...gridCells, { index: contextMenu.cellIndex, type }]);
+      }
+      setContextMenu(null);
+    }
+  };
+  
+  const removeElement = () => {
+    if (contextMenu) {
+      setGridCells(gridCells.filter(c => c.index !== contextMenu.cellIndex));
+      setContextMenu(null);
+    }
+  };
+  
+  React.useEffect(() => {
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, []);
 
   React.useEffect(() => {
     const link = document.createElement('link');
@@ -693,17 +801,39 @@ const PixelMoireGenerator = () => {
                 <label className="block text-sm mb-1">Rows: {settings.gridRows}</label>
                 <input type="range" min="2" max="20" value={settings.gridRows} onChange={(e) => setSettings(s => ({ ...s, gridRows: parseInt(e.target.value), gridPreset: 'Custom' }))} className="w-full" />
               </div>
-              <div>
-                <button onClick={generateRandomGrid} className="w-full px-3 py-2 bg-blue-500 text-white rounded text-sm">
+              
+              <div className="border-t pt-2 mt-2">
+                <h4 className="font-semibold mb-2 text-sm">Interaction Mode</h4>
+                <label className="flex items-center mb-2">
+                  <input type="checkbox" checked={settings.drawMode} onChange={(e) => setSettings(s => ({ ...s, drawMode: e.target.checked }))} className="mr-2" />
+                  Draw Mode (Click & Drag)
+                </label>
+                {settings.drawMode && (
+                  <div>
+                    <label className="block text-sm mb-1">Brush Element</label>
+                    <select value={settings.selectedElement} onChange={(e) => setSettings(s => ({ ...s, selectedElement: e.target.value }))} className="w-full p-2 border rounded text-sm">
+                      <option value="char">Character</option>
+                      <option value="dot">Dot</option>
+                      <option value="square">Square</option>
+                      <option value="line">Line</option>
+                    </select>
+                  </div>
+                )}
+                <div className="text-xs text-gray-500 mt-1">
+                  {settings.drawMode ? 'Click and drag to paint elements' : 'Click cells for popup menu'}
+                </div>
+              </div>
+              
+              <div className="border-t pt-2 mt-2">
+                <button onClick={generateRandomGrid} className="w-full px-3 py-2 bg-blue-500 text-white rounded text-sm mb-2">
                   Generate Random Pattern
                 </button>
-              </div>
-              <div>
                 <button onClick={() => setGridCells([])} className="w-full px-3 py-2 bg-red-500 text-white rounded text-sm">
                   Clear Grid
                 </button>
               </div>
-              <div>
+              
+              <div className="border-t pt-2 mt-2">
                 <label className="block text-sm mb-1">Character Sequence</label>
                 <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc" />
               </div>
@@ -714,9 +844,6 @@ const PixelMoireGenerator = () => {
               <div>
                 <label className="block text-sm mb-1">Cycle Speed: {settings.charCycleSpeed}</label>
                 <input type="range" min="1" max="20" value={settings.charCycleSpeed} onChange={(e) => setSettings(s => ({ ...s, charCycleSpeed: parseInt(e.target.value) }))} className="w-full" />
-              </div>
-              <div className="text-xs text-gray-500 mt-2">
-                Click "Generate Random Pattern" to create a layout, or clear and manually click cells (coming soon)
               </div>
             </div>
           )}
@@ -758,8 +885,41 @@ const PixelMoireGenerator = () => {
         </div>
       </div>
 
-      <div className="flex-1 p-4">
-        <canvas ref={canvasRef} className="w-full h-full border border-gray-300 bg-white rounded-lg shadow-lg" />
+      <div className="flex-1 p-4 relative">
+        <canvas 
+          ref={canvasRef} 
+          className="w-full h-full border border-gray-300 bg-white rounded-lg shadow-lg cursor-crosshair" 
+          onClick={handleCanvasClick}
+          onMouseDown={handleCanvasMouseDown}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseUp={handleCanvasMouseUp}
+          onMouseLeave={handleCanvasMouseUp}
+        />
+        
+        {contextMenu && (
+          <div 
+            className="fixed bg-white shadow-lg rounded-lg border border-gray-300 py-1 z-50"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button onClick={() => addElement('char')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add Character
+            </button>
+            <button onClick={() => addElement('dot')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add Dot
+            </button>
+            <button onClick={() => addElement('square')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add Square
+            </button>
+            <button onClick={() => addElement('line')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add Line
+            </button>
+            <div className="border-t border-gray-200 my-1"></div>
+            <button onClick={removeElement} className="block w-full px-4 py-2 text-left hover:bg-red-100 text-sm text-red-600">
+              Remove Element
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
