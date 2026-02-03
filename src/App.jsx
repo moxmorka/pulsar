@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { RotateCcw, Download } from 'lucide-react';
 
@@ -292,10 +293,9 @@ const PixelMoireGenerator = () => {
       const chars = settings.charSequence.split('');
       if (chars.length === 0) return;
       
-      // Time-based cycling - each character rotates through the sequence
-      const cycleOffset = audioEnabled 
-        ? Math.floor(animTime * settings.charCycleSpeed * (1 + audioLevel * 2)) 
-        : 0;
+      // ALWAYS cycle, speed up with audio
+      const baseSpeed = audioEnabled ? settings.charCycleSpeed * (1 + audioLevel * 2) : 1;
+      const cycleOffset = Math.floor(animTime * baseSpeed);
       
       let globalIndex = 0;
       for (let y = 0; y < height; y += settings.spacing) {
@@ -307,7 +307,7 @@ const PixelMoireGenerator = () => {
             drawY += d.y;
           }
           
-          // Each position cycles through ALL characters over time
+          // Cycle through characters over time
           const charIndex = (globalIndex + cycleOffset) % chars.length;
           const char = chars[charIndex];
           
