@@ -292,8 +292,10 @@ const PixelMoireGenerator = () => {
       const chars = settings.charSequence.split('');
       if (chars.length === 0) return;
       
-      // Audio-driven cycling offset
-      const cycleOffset = audioEnabled ? Math.floor(animTime * settings.charCycleSpeed * (1 + audioLevel * 3)) : 0;
+      // Time-based cycling - each character rotates through the sequence
+      const cycleOffset = audioEnabled 
+        ? Math.floor(animTime * settings.charCycleSpeed * (1 + audioLevel * 2)) 
+        : 0;
       
       let globalIndex = 0;
       for (let y = 0; y < height; y += settings.spacing) {
@@ -305,7 +307,9 @@ const PixelMoireGenerator = () => {
             drawY += d.y;
           }
           
-          const char = chars[(globalIndex + cycleOffset) % chars.length];
+          // Each position cycles through ALL characters over time
+          const charIndex = (globalIndex + cycleOffset) % chars.length;
+          const char = chars[charIndex];
           
           ctx.save();
           ctx.translate(drawX, drawY);
@@ -427,6 +431,12 @@ const PixelMoireGenerator = () => {
           <div>Bass: {bassLevel.toFixed(3)}</div>
           <div>Intensity: {distortionMultiplier.current.toFixed(2)}x</div>
           <div>Speed: {speedMultiplier.current.toFixed(2)}x</div>
+          {settings.patternType === 'char-grid' && (
+            <>
+              <div>Chars: "{settings.charSequence}"</div>
+              <div>Char count: {settings.charSequence.length}</div>
+            </>
+          )}
         </div>
 
         <div>
