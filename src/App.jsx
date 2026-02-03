@@ -291,9 +291,10 @@ const PixelMoireGenerator = () => {
       const chars = settings.charSequence.split('');
       if (chars.length === 0) return;
       
-      let rowIndex = 0;
+      const gridCols = Math.ceil(width / settings.spacing);
+      let globalIndex = 0;
+      
       for (let y = 0; y < height; y += settings.spacing) {
-        let colIndex = 0;
         for (let x = 0; x < width; x += settings.spacing) {
           let drawX = x, drawY = y;
           if (settings.distortionEnabled) {
@@ -301,16 +302,17 @@ const PixelMoireGenerator = () => {
             drawX += d.x;
             drawY += d.y;
           }
-          const charIndex = (rowIndex * Math.ceil(width / settings.spacing) + colIndex) % chars.length;
-          const char = chars[charIndex];
+          
+          const char = chars[globalIndex % chars.length];
+          
           ctx.save();
           ctx.translate(drawX, drawY);
           ctx.scale(1 + bassLevel * sensitivityRef.current * 0.3, 1 + bassLevel * sensitivityRef.current * 0.3);
           ctx.fillText(char, 0, 0);
           ctx.restore();
-          colIndex++;
+          
+          globalIndex++;
         }
-        rowIndex++;
       }
     } else if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
