@@ -36,8 +36,13 @@ const PixelMoireGenerator = () => {
     customSvgScale: 1,
     charSequence: '01',
     charGridSize: 20,
-    charCycleSpeed: 5
+    charCycleSpeed: 5,
+    gridColumns: 8,
+    gridRows: 6,
+    gridPreset: 'custom'
   });
+  
+  const [gridCells, setGridCells] = React.useState([]);
 
   const distortionTypes = [
     { value: 'liquify', label: 'Liquify Flow' },
@@ -49,6 +54,30 @@ const PixelMoireGenerator = () => {
   ];
 
   const googleFonts = ['Impact', 'Roboto', 'Open Sans', 'Montserrat', 'Bebas Neue', 'Anton', 'Pacifico', 'Lobster'];
+  
+  const gridPresets = [
+    { name: 'Custom', cols: 8, rows: 6 },
+    { name: 'Swiss Poster', cols: 6, rows: 8 },
+    { name: 'Magazine', cols: 12, rows: 16 },
+    { name: 'Minimal', cols: 4, rows: 4 },
+    { name: 'Dense', cols: 16, rows: 12 },
+    { name: 'Golden', cols: 8, rows: 5 }
+  ];
+
+  const generateRandomGrid = () => {
+    const cells = [];
+    const totalCells = settings.gridColumns * settings.gridRows;
+    const fillRatio = Math.random() * 0.3 + 0.2; // 20-50% filled
+    for (let i = 0; i < totalCells; i++) {
+      if (Math.random() < fillRatio) {
+        cells.push({
+          index: i,
+          type: ['char', 'dot', 'square', 'line'][Math.floor(Math.random() * 4)]
+        });
+      }
+    }
+    setGridCells(cells);
+  };
 
   React.useEffect(() => {
     const link = document.createElement('link');
@@ -292,9 +321,9 @@ const PixelMoireGenerator = () => {
       const chars = settings.charSequence.split('');
       if (chars.length === 0) return;
       
-      // Time offset for animation
-      const baseSpeed = audioEnabled ? settings.charCycleSpeed * (1 + audioLevel * 2) : 1;
-      const timeOffset = Math.floor(animTime * baseSpeed);
+      // FIXED: Use raw time in seconds for smoother cycling
+      const cycleTime = time * 0.001 * settings.charCycleSpeed * 0.5;
+      const globalOffset = Math.floor(cycleTime);
       
       let rowIndex = 0;
       for (let y = 0; y < height; y += settings.spacing) {
@@ -307,14 +336,15 @@ const PixelMoireGenerator = () => {
             drawY += d.y;
           }
           
-          // Each position gets its own character from the sequence, cycling over time
-          const positionIndex = (rowIndex * 100 + colIndex); // unique per position
-          const charIndex = (positionIndex + timeOffset) % chars.length;
+          // Each position offset by its grid location, plus global time offset
+          const posOffset = rowIndex * 7 + colIndex * 3; // creates variety
+          const charIndex = (posOffset + globalOffset) % chars.length;
           const char = chars[charIndex];
           
           ctx.save();
           ctx.translate(drawX, drawY);
-          ctx.scale(1 + bassLevel * sensitivityRef.current * 0.3, 1 + bassLevel * sensitivityRef.current * 0.3);
+          const scale = 1 + (audioEnabled ? bassLevel * sensitivityRef.current * 0.3 : 0);
+          ctx.scale(scale, scale);
           ctx.fillText(char, 0, 0);
           ctx.restore();
           
@@ -322,6 +352,72 @@ const PixelMoireGenerator = () => {
         }
         rowIndex++;
       }
+    } else if (settings.patternType === 'swiss-grid') {
+      const cellWidth = width / settings.gridColumns;
+      const cellHeight = height / settings.gridRows;
+      
+      // Draw grid lines
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= settings.gridColumns; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * cellWidth, 0);
+        ctx.lineTo(i * cellWidth, height);
+        ctx.stroke();
+      }
+      for (let i = 0; i <= settings.gridRows; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, i * cellHeight);
+        ctx.lineTo(width, i * cellHeight);
+        ctx.stroke();
+      }
+      
+      // Draw elements in filled cells
+      ctx.fillStyle = '#000000';
+      const chars = settings.charSequence.split('');
+      const cycleTime = time * 0.001 * settings.charCycleSpeed * 0.5;
+      const globalOffset = Math.floor(cycleTime);
+      
+      gridCells.forEach(cell => {
+        const col = cell.index % settings.gridColumns;
+        const row = Math.floor(cell.index / settings.gridColumns);
+        const x = col * cellWidth + cellWidth / 2;
+        const y = row * cellHeight + cellHeight / 2;
+        
+        let drawX = x, drawY = y;
+        if (settings.distortionEnabled) {
+          const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+          drawX += d.x;
+          drawY += d.y;
+        }
+        
+        const scale = 1 + (audioEnabled ? bassLevel * sensitivityRef.current * 0.3 : 0);
+        
+        if (cell.type === 'char' && chars.length > 0) {
+          ctx.font = `${settings.charGridSize}px "${settings.font}", monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const charIndex = (cell.index + globalOffset) % chars.length;
+          ctx.save();
+          ctx.translate(drawX, drawY);
+          ctx.scale(scale, scale);
+          ctx.fillText(chars[charIndex], 0, 0);
+          ctx.restore();
+        } else if (cell.type === 'dot') {
+          ctx.beginPath();
+          ctx.arc(drawX, drawY, 8 * scale, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (cell.type === 'square') {
+          const size = 20 * scale;
+          ctx.fillRect(drawX - size/2, drawY - size/2, size, size);
+        } else if (cell.type === 'line') {
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(drawX - 15, drawY);
+          ctx.lineTo(drawX + 15, drawY);
+          ctx.stroke();
+        }
+      });
     } else if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
         ctx.beginPath();
@@ -473,6 +569,7 @@ const PixelMoireGenerator = () => {
             <option value="triangles">Triangles</option>
             <option value="text">Text</option>
             <option value="char-grid">Character Grid</option>
+            <option value="swiss-grid">Swiss Grid System</option>
             <option value="custom-svg">Custom SVG Shape</option>
           </select>
           
@@ -547,7 +644,7 @@ const PixelMoireGenerator = () => {
               <div>
                 <label className="block text-sm mb-1">Character Sequence</label>
                 <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc or !@#$" />
-                <div className="text-xs text-gray-500 mt-1">Characters cycle when audio is enabled (e.g., "01", "█▓▒░", "!@#$%", "あいうえお")</div>
+                <div className="text-xs text-gray-500 mt-1">Characters cycle continuously (e.g., "01", "█▓▒░", "!@#$%")</div>
               </div>
               <div>
                 <label className="block text-sm mb-1">Font</label>
@@ -570,7 +667,56 @@ const PixelMoireGenerator = () => {
               <div>
                 <label className="block text-sm mb-1">Cycle Speed: {settings.charCycleSpeed}</label>
                 <input type="range" min="1" max="20" value={settings.charCycleSpeed} onChange={(e) => setSettings(s => ({ ...s, charCycleSpeed: parseInt(e.target.value) }))} className="w-full" />
-                <div className="text-xs text-gray-500 mt-1">How fast characters cycle through (audio reactive)</div>
+                <div className="text-xs text-gray-500 mt-1">How fast characters cycle</div>
+              </div>
+            </div>
+          )}
+          
+          {settings.patternType === 'swiss-grid' && (
+            <div className="space-y-2">
+              <div>
+                <label className="block text-sm mb-1">Grid Preset</label>
+                <select value={settings.gridPreset} onChange={(e) => {
+                  const preset = gridPresets.find(p => p.name === e.target.value);
+                  if (preset) {
+                    setSettings(s => ({ ...s, gridPreset: e.target.value, gridColumns: preset.cols, gridRows: preset.rows }));
+                  }
+                }} className="w-full p-2 border rounded text-sm">
+                  {gridPresets.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Columns: {settings.gridColumns}</label>
+                <input type="range" min="2" max="20" value={settings.gridColumns} onChange={(e) => setSettings(s => ({ ...s, gridColumns: parseInt(e.target.value), gridPreset: 'Custom' }))} className="w-full" />
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Rows: {settings.gridRows}</label>
+                <input type="range" min="2" max="20" value={settings.gridRows} onChange={(e) => setSettings(s => ({ ...s, gridRows: parseInt(e.target.value), gridPreset: 'Custom' }))} className="w-full" />
+              </div>
+              <div>
+                <button onClick={generateRandomGrid} className="w-full px-3 py-2 bg-blue-500 text-white rounded text-sm">
+                  Generate Random Pattern
+                </button>
+              </div>
+              <div>
+                <button onClick={() => setGridCells([])} className="w-full px-3 py-2 bg-red-500 text-white rounded text-sm">
+                  Clear Grid
+                </button>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Character Sequence</label>
+                <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc" />
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Character Size: {settings.charGridSize}</label>
+                <input type="range" min="10" max="60" value={settings.charGridSize} onChange={(e) => setSettings(s => ({ ...s, charGridSize: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Cycle Speed: {settings.charCycleSpeed}</label>
+                <input type="range" min="1" max="20" value={settings.charCycleSpeed} onChange={(e) => setSettings(s => ({ ...s, charCycleSpeed: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+              <div className="text-xs text-gray-500 mt-2">
+                Click "Generate Random Pattern" to create a layout, or clear and manually click cells (coming soon)
               </div>
             </div>
           )}
