@@ -479,7 +479,7 @@ const PixelMoireGenerator = () => {
       const cellHeight = height / settings.gridRows;
       
       // Draw grid lines
-      ctx.strokeStyle = '#e0e0e0';
+      ctx.strokeStyle = '#cccccc';
       ctx.lineWidth = 1;
       for (let i = 0; i <= settings.gridColumns; i++) {
         ctx.beginPath();
@@ -496,6 +496,7 @@ const PixelMoireGenerator = () => {
       
       // Draw elements in filled cells
       ctx.fillStyle = '#000000';
+      ctx.strokeStyle = '#000000';
       const chars = settings.charSequence.split('');
       const cycleTime = time * 0.001 * settings.charCycleSpeed * 0.5;
       const globalOffset = Math.floor(cycleTime);
@@ -519,6 +520,7 @@ const PixelMoireGenerator = () => {
           ctx.font = `${settings.charGridSize}px "${settings.font}", monospace`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#000000';
           const charIndex = (cell.index + globalOffset) % chars.length;
           ctx.save();
           ctx.translate(drawX, drawY);
@@ -526,17 +528,20 @@ const PixelMoireGenerator = () => {
           ctx.fillText(chars[charIndex], 0, 0);
           ctx.restore();
         } else if (cell.type === 'dot') {
+          ctx.fillStyle = '#000000';
           ctx.beginPath();
-          ctx.arc(drawX, drawY, 8 * scale, 0, Math.PI * 2);
+          ctx.arc(drawX, drawY, 12 * scale, 0, Math.PI * 2);
           ctx.fill();
         } else if (cell.type === 'square') {
-          const size = 20 * scale;
+          ctx.fillStyle = '#000000';
+          const size = 30 * scale;
           ctx.fillRect(drawX - size/2, drawY - size/2, size, size);
         } else if (cell.type === 'line') {
-          ctx.lineWidth = 3;
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 4;
           ctx.beginPath();
-          ctx.moveTo(drawX - 15, drawY);
-          ctx.lineTo(drawX + 15, drawY);
+          ctx.moveTo(drawX - 20, drawY);
+          ctx.lineTo(drawX + 20, drawY);
           ctx.stroke();
         }
       });
@@ -618,7 +623,7 @@ const PixelMoireGenerator = () => {
     };
     animationRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [settings]);
+  }, [settings, gridCells]); // Added gridCells dependency
 
   React.useEffect(() => {
     const handleResize = () => {
