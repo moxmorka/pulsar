@@ -35,7 +35,8 @@ const PixelMoireGenerator = () => {
     fontSize: 40,
     customSvgScale: 1,
     charSequence: '01',
-    charGridSize: 20
+    charGridSize: 20,
+    charCycleSpeed: 5
   });
 
   const distortionTypes = [
@@ -291,9 +292,10 @@ const PixelMoireGenerator = () => {
       const chars = settings.charSequence.split('');
       if (chars.length === 0) return;
       
-      const gridCols = Math.ceil(width / settings.spacing);
-      let globalIndex = 0;
+      // Audio-driven cycling offset
+      const cycleOffset = audioEnabled ? Math.floor(animTime * settings.charCycleSpeed * (1 + audioLevel * 3)) : 0;
       
+      let globalIndex = 0;
       for (let y = 0; y < height; y += settings.spacing) {
         for (let x = 0; x < width; x += settings.spacing) {
           let drawX = x, drawY = y;
@@ -303,7 +305,7 @@ const PixelMoireGenerator = () => {
             drawY += d.y;
           }
           
-          const char = chars[globalIndex % chars.length];
+          const char = chars[(globalIndex + cycleOffset) % chars.length];
           
           ctx.save();
           ctx.translate(drawX, drawY);
@@ -533,7 +535,7 @@ const PixelMoireGenerator = () => {
               <div>
                 <label className="block text-sm mb-1">Character Sequence</label>
                 <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc or !@#$" />
-                <div className="text-xs text-gray-500 mt-1">Characters cycle across the grid (e.g., "01", "█▓▒░", "!@#$%", "あいうえお")</div>
+                <div className="text-xs text-gray-500 mt-1">Characters cycle when audio is enabled (e.g., "01", "█▓▒░", "!@#$%", "あいうえお")</div>
               </div>
               <div>
                 <label className="block text-sm mb-1">Font</label>
@@ -552,6 +554,11 @@ const PixelMoireGenerator = () => {
               <div>
                 <label className="block text-sm mb-1">Character Size: {settings.charGridSize}</label>
                 <input type="range" min="10" max="60" value={settings.charGridSize} onChange={(e) => setSettings(s => ({ ...s, charGridSize: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Cycle Speed: {settings.charCycleSpeed}</label>
+                <input type="range" min="1" max="20" value={settings.charCycleSpeed} onChange={(e) => setSettings(s => ({ ...s, charCycleSpeed: parseInt(e.target.value) }))} className="w-full" />
+                <div className="text-xs text-gray-500 mt-1">How fast characters cycle through (audio reactive)</div>
               </div>
             </div>
           )}
