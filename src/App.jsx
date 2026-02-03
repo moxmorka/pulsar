@@ -33,7 +33,9 @@ const PixelMoireGenerator = () => {
     text: 'SOUND',
     font: 'Impact',
     fontSize: 40,
-    customSvgScale: 1
+    customSvgScale: 1,
+    charSequence: '01',
+    charGridSize: 20
   });
 
   const distortionTypes = [
@@ -282,6 +284,31 @@ const PixelMoireGenerator = () => {
           ctx.restore();
         }
       }
+    } else if (settings.patternType === 'char-grid') {
+      ctx.font = `${settings.charGridSize}px "${settings.font}", monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const chars = settings.charSequence.split('');
+      if (chars.length === 0) return;
+      
+      let charIndex = 0;
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          const char = chars[charIndex % chars.length];
+          ctx.save();
+          ctx.translate(drawX, drawY);
+          ctx.scale(1 + bassLevel * sensitivityRef.current * 0.3, 1 + bassLevel * sensitivityRef.current * 0.3);
+          ctx.fillText(char, 0, 0);
+          ctx.restore();
+          charIndex++;
+        }
+      }
     } else if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
         ctx.beginPath();
@@ -426,6 +453,7 @@ const PixelMoireGenerator = () => {
             <option value="squares">Squares</option>
             <option value="triangles">Triangles</option>
             <option value="text">Text</option>
+            <option value="char-grid">Character Grid</option>
             <option value="custom-svg">Custom SVG Shape</option>
           </select>
           
@@ -491,6 +519,34 @@ const PixelMoireGenerator = () => {
               <div>
                 <label className="block text-sm mb-1">Font Size: {settings.fontSize}</label>
                 <input type="range" min="20" max="100" value={settings.fontSize} onChange={(e) => setSettings(s => ({ ...s, fontSize: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+            </div>
+          )}
+          
+          {settings.patternType === 'char-grid' && (
+            <div className="space-y-2">
+              <div>
+                <label className="block text-sm mb-1">Character Sequence</label>
+                <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc or !@#$" />
+                <div className="text-xs text-gray-500 mt-1">Characters cycle across the grid (e.g., "01", "█▓▒░", "!@#$%", "あいうえお")</div>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Font</label>
+                <select value={settings.font} onChange={(e) => setSettings(s => ({ ...s, font: e.target.value }))} className="w-full p-2 border rounded text-sm">
+                  {googleFonts.map(font => <option key={font} value={font}>{font}</option>)}
+                  {customFont && <option value={customFont}>Custom Font</option>}
+                </select>
+              </div>
+              <div>
+                <label className="block">
+                  <div className="text-sm mb-1">Upload Custom Font (.ttf, .otf, .woff)</div>
+                  <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} className="w-full text-xs p-2 border rounded" />
+                </label>
+                {customFont && <div className="text-xs text-green-600">✓ Custom font loaded</div>}
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Character Size: {settings.charGridSize}</label>
+                <input type="range" min="10" max="60" value={settings.charGridSize} onChange={(e) => setSettings(s => ({ ...s, charGridSize: parseInt(e.target.value) }))} className="w-full" />
               </div>
             </div>
           )}
