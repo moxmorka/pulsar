@@ -102,8 +102,9 @@ const PixelMoireGenerator = () => {
     return null;
   };
   
-  const handleCanvasClick = (e) => {
+  const handleCanvasInteraction = (e) => {
     if (settings.patternType !== 'swiss-grid') return;
+    
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -118,12 +119,16 @@ const PixelMoireGenerator = () => {
     
     if (settings.drawMode) {
       // Draw mode - add element directly
-      const existing = gridCells.findIndex(c => c.index === cellIndex);
-      if (existing === -1) {
-        setGridCells([...gridCells, { index: cellIndex, type: settings.selectedElement }]);
-      }
+      setGridCells(prev => {
+        const existing = prev.findIndex(c => c.index === cellIndex);
+        if (existing === -1) {
+          return [...prev, { index: cellIndex, type: settings.selectedElement }];
+        }
+        return prev;
+      });
     } else {
       // Click mode - show context menu
+      e.preventDefault();
       setContextMenu({ x: e.clientX, y: e.clientY, cellIndex });
     }
   };
@@ -131,33 +136,42 @@ const PixelMoireGenerator = () => {
   const handleCanvasMouseDown = (e) => {
     if (settings.patternType === 'swiss-grid' && settings.drawMode) {
       setIsDrawing(true);
-      handleCanvasClick(e);
+      handleCanvasInteraction(e);
     }
   };
   
   const handleCanvasMouseMove = (e) => {
-    if (settings.patternType === 'swiss-grid' && settings.drawMode && isDrawing) {
-      const canvas = canvasRef.current;
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const canvasX = x * scaleX;
-      const canvasY = y * scaleY;
-      const cellIndex = getCellFromClick(canvasX, canvasY);
-      
-      if (cellIndex !== null) {
-        const existing = gridCells.findIndex(c => c.index === cellIndex);
+    if (!isDrawing || settings.patternType !== 'swiss-grid' || !settings.drawMode) return;
+    
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = x * scaleX;
+    const canvasY = y * scaleY;
+    const cellIndex = getCellFromClick(canvasX, canvasY);
+    
+    if (cellIndex !== null) {
+      setGridCells(prev => {
+        const existing = prev.findIndex(c => c.index === cellIndex);
         if (existing === -1) {
-          setGridCells(prev => [...prev, { index: cellIndex, type: settings.selectedElement }]);
+          return [...prev, { index: cellIndex, type: settings.selectedElement }];
         }
-      }
+        return prev;
+      });
     }
   };
   
   const handleCanvasMouseUp = () => {
     setIsDrawing(false);
+  };
+  
+  const handleCanvasClick = (e) => {
+    if (settings.patternType === 'swiss-grid' && !settings.drawMode) {
+      handleCanvasInteraction(e);
+    }
   };
   
   const addElement = (type) => {
