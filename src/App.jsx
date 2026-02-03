@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { RotateCcw, Download } from 'lucide-react';
 
@@ -293,12 +292,13 @@ const PixelMoireGenerator = () => {
       const chars = settings.charSequence.split('');
       if (chars.length === 0) return;
       
-      // ALWAYS cycle, speed up with audio
+      // Time offset for animation
       const baseSpeed = audioEnabled ? settings.charCycleSpeed * (1 + audioLevel * 2) : 1;
-      const cycleOffset = Math.floor(animTime * baseSpeed);
+      const timeOffset = Math.floor(animTime * baseSpeed);
       
-      let globalIndex = 0;
+      let rowIndex = 0;
       for (let y = 0; y < height; y += settings.spacing) {
+        let colIndex = 0;
         for (let x = 0; x < width; x += settings.spacing) {
           let drawX = x, drawY = y;
           if (settings.distortionEnabled) {
@@ -307,8 +307,9 @@ const PixelMoireGenerator = () => {
             drawY += d.y;
           }
           
-          // Cycle through characters over time
-          const charIndex = (globalIndex + cycleOffset) % chars.length;
+          // Each position gets its own character from the sequence, cycling over time
+          const positionIndex = (rowIndex * 100 + colIndex); // unique per position
+          const charIndex = (positionIndex + timeOffset) % chars.length;
           const char = chars[charIndex];
           
           ctx.save();
@@ -317,8 +318,9 @@ const PixelMoireGenerator = () => {
           ctx.fillText(char, 0, 0);
           ctx.restore();
           
-          globalIndex++;
+          colIndex++;
         }
+        rowIndex++;
       }
     } else if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
