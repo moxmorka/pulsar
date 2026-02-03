@@ -657,6 +657,14 @@ const PixelMoireGenerator = () => {
               <div>Char count: {settings.charSequence.length}</div>
             </>
           )}
+          {settings.patternType === 'swiss-grid' && (
+            <>
+              <div>Draw Mode: {settings.drawMode ? 'ON' : 'OFF'}</div>
+              <div>Drawing: {isDrawing ? 'YES' : 'NO'}</div>
+              <div>Elements: {gridCells.length}</div>
+              <div>Selected: {settings.selectedElement}</div>
+            </>
+          )}
         </div>
 
         <div>
