@@ -2,6 +2,7 @@ import React from 'react';
 import { RotateCcw, Download } from 'lucide-react';
 
 const PixelMoireGenerator = () => {
+  // All refs
   const canvasRef = React.useRef(null);
   const animationRef = React.useRef(null);
   const audioContextRef = React.useRef(null);
@@ -10,18 +11,27 @@ const PixelMoireGenerator = () => {
   const speedMultiplier = React.useRef(1);
   const sensitivityRef = React.useRef(2);
   const svgImageRef = React.useRef(null);
+  const midiAccessRef = React.useRef(null);
+  const midiVelocityRef = React.useRef(0);
+  const midiNoteRef = React.useRef(0);
 
+  // All state
   const [audioEnabled, setAudioEnabled] = React.useState(false);
   const [audioLevel, setAudioLevel] = React.useState(0);
   const [bassLevel, setBassLevel] = React.useState(0);
   const [customSvg, setCustomSvg] = React.useState(null);
   const [customFont, setCustomFont] = React.useState(null);
+  const [gridCells, setGridCells] = React.useState([]);
+  const [contextMenu, setContextMenu] = React.useState(null);
+  const [isDrawing, setIsDrawing] = React.useState(false);
+  const [midiEnabled, setMidiEnabled] = React.useState(false);
+  const [midiDevices, setMidiDevices] = React.useState([]);
 
   const [settings, setSettings] = React.useState({
     patternType: 'vertical-lines',
     lineThickness: 10,
     spacing: 20,
-    distortionEnabled: true,
+    distortionEnabled: false,
     distortionType: 'liquify',
     distortionStrength: 20,
     distortionSpeed: 1,
@@ -41,12 +51,17 @@ const PixelMoireGenerator = () => {
     gridRows: 6,
     gridPreset: 'custom',
     drawMode: false,
-    selectedElement: 'char'
+    selectedElement: 'char',
+    showGridLines: true,
+    gridRotation: 0,
+    cycleMode: 'independent',
+    elementBehavior: 'static',
+    midiSensitivity: 1,
+    easingFunction: 'fibonacci',
+    stringBehavior: 'cycle',
+    motionDamping: 0.8,
+    charStagger: 0.1
   });
-  
-  const [gridCells, setGridCells] = React.useState([]);
-  const [contextMenu, setContextMenu] = React.useState(null);
-  const [isDrawing, setIsDrawing] = React.useState(false);
 
   const distortionTypes = [
     { value: 'liquify', label: 'Liquify Flow' },
@@ -61,188 +76,85 @@ const PixelMoireGenerator = () => {
   
   const gridPresets = [
     { name: 'Custom', cols: 8, rows: 6 },
-    { name: 'Swiss Poster', cols: 6, rows: 8 },
-    { name: 'Magazine', cols: 12, rows: 16 },
-    { name: 'Minimal', cols: 4, rows: 4 },
-    { name: 'Dense', cols: 16, rows: 12 },
-    { name: 'Golden', cols: 8, rows: 5 }
+    { name: 'Swiss Poster', cols: 12, rows: 16 },
+    { name: 'Magazine', cols: 16, rows: 20 },
+    { name: 'Minimal', cols: 6, rows: 8 },
+    { name: 'Dense', cols: 24, rows: 18 },
+    { name: 'Ultra Dense', cols: 40, rows: 30 },
+    { name: 'Golden', cols: 13, rows: 8 }
   ];
 
-  const generateRandomGrid = () => {
-    const cells = [];
-    const totalCells = settings.gridColumns * settings.gridRows;
-    const numElements = Math.floor(totalCells * (Math.random() * 0.3 + 0.2)); // 20-50% filled
-    const usedIndices = new Set();
-    
-    for (let i = 0; i < numElements; i++) {
-      let index;
-      do {
-        index = Math.floor(Math.random() * totalCells);
-      } while (usedIndices.has(index));
-      
-      usedIndices.add(index);
-      cells.push({
-        index: index,
-        type: ['char', 'dot', 'square', 'line'][Math.floor(Math.random() * 4)]
-      });
-    }
-    setGridCells(cells);
-  };
-  
-  const getCellFromClick = (canvasX, canvasY) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const cellWidth = canvas.width / settings.gridColumns;
-    const cellHeight = canvas.height / settings.gridRows;
-    const col = Math.floor(canvasX / cellWidth);
-    const row = Math.floor(canvasY / cellHeight);
-    if (col >= 0 && col < settings.gridColumns && row >= 0 && row < settings.gridRows) {
-      return row * settings.gridColumns + col;
-    }
-    return null;
-  };
-  
-  const handleCanvasInteraction = (e) => {
-    if (settings.patternType !== 'swiss-grid') return;
-    
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const canvasX = x * scaleX;
-    const canvasY = y * scaleY;
-    const cellIndex = getCellFromClick(canvasX, canvasY);
-    
-    if (cellIndex === null) return;
-    
-    if (settings.drawMode) {
-      // Draw mode - add element directly
-      setGridCells(prev => {
-        const existing = prev.findIndex(c => c.index === cellIndex);
-        if (existing === -1) {
-          return [...prev, { index: cellIndex, type: settings.selectedElement }];
-        }
-        return prev;
-      });
-    } else {
-      // Click mode - show context menu
-      e.preventDefault();
-      setContextMenu({ x: e.clientX, y: e.clientY, cellIndex });
+  // Fibonacci easing
+  const PHI = 1.618033988749895;
+  const easingFunctions = {
+    appleEase: (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t,
+    fibonacci: (t) => Math.pow(t, PHI - 1),
+    goldenEaseOut: (t) => 1 - Math.pow(1 - t, PHI),
+    goldenEaseIn: (t) => Math.pow(t, PHI),
+    fibonacciSpring: (t) => {
+      const c4 = (2 * Math.PI) / PHI;
+      return t === 0 ? 0 : t === 1 ? 1 : Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * c4) + 1;
+    },
+    appleElastic: (t) => {
+      const c4 = (2 * Math.PI) / 3;
+      return t === 0 ? 0 : t === 1 ? 1 : Math.pow(2, -8 * t) * Math.sin((t * 8 - 0.75) * c4) + 1;
     }
   };
   
-  const handleCanvasMouseDown = (e) => {
-    if (settings.patternType === 'swiss-grid' && settings.drawMode) {
-      setIsDrawing(true);
-      handleCanvasInteraction(e);
-    }
+  const applyEasing = (t) => {
+    const easing = easingFunctions[settings.easingFunction] || easingFunctions.fibonacci;
+    return easing(Math.max(0, Math.min(1, t)));
   };
-  
-  const handleCanvasMouseMove = (e) => {
-    if (!isDrawing || settings.patternType !== 'swiss-grid' || !settings.drawMode) return;
-    
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const canvasX = x * scaleX;
-    const canvasY = y * scaleY;
-    const cellIndex = getCellFromClick(canvasX, canvasY);
-    
-    if (cellIndex !== null) {
-      setGridCells(prev => {
-        const existing = prev.findIndex(c => c.index === cellIndex);
-        if (existing === -1) {
-          return [...prev, { index: cellIndex, type: settings.selectedElement }];
-        }
-        return prev;
-      });
-    }
-  };
-  
-  const handleCanvasMouseUp = () => {
-    setIsDrawing(false);
-  };
-  
-  const handleCanvasClick = (e) => {
-    if (settings.patternType === 'swiss-grid' && !settings.drawMode) {
-      handleCanvasInteraction(e);
-    }
-  };
-  
-  const addElement = (type) => {
-    if (contextMenu) {
-      const existing = gridCells.findIndex(c => c.index === contextMenu.cellIndex);
-      if (existing >= 0) {
-        const newCells = [...gridCells];
-        newCells[existing] = { index: contextMenu.cellIndex, type };
-        setGridCells(newCells);
-      } else {
-        setGridCells([...gridCells, { index: contextMenu.cellIndex, type }]);
-      }
-      setContextMenu(null);
-    }
-  };
-  
-  const removeElement = () => {
-    if (contextMenu) {
-      setGridCells(gridCells.filter(c => c.index !== contextMenu.cellIndex));
-      setContextMenu(null);
-    }
-  };
-  
-  React.useEffect(() => {
-    const closeMenu = () => setContextMenu(null);
-    window.addEventListener('click', closeMenu);
-    return () => window.removeEventListener('click', closeMenu);
-  }, []);
 
+  // Load fonts
   React.useEffect(() => {
     const link = document.createElement('link');
-    link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@900&family=Open+Sans:wght@800&family=Montserrat:wght@900&family=Bebas+Neue&family=Anton&family=Pacifico&family=Lobster&display=swap';
+    link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@900&family=Open+Sans:wght@800&family=Montserrat:wght@900&family=Bebas+Neue&family=Anton&display=swap';
     link.rel = 'stylesheet';
     document.head.appendChild(link);
   }, []);
 
-  const handleSvgUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const svgText = event.target.result;
-      const img = new Image();
-      const blob = new Blob([svgText], { type: 'image/svg+xml' });
-      const url = URL.createObjectURL(blob);
-      img.onload = () => {
-        svgImageRef.current = img;
-        setCustomSvg(url);
-        setSettings(s => ({ ...s, patternType: 'custom-svg' }));
-      };
-      img.src = url;
-    };
-    reader.readAsText(file);
-  };
+  // MIDI
+  React.useEffect(() => {
+    if (!midiEnabled) {
+      midiVelocityRef.current = 0;
+      midiNoteRef.current = 0;
+      return;
+    }
 
-  const handleFontUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const fontName = 'CustomFont';
-      const fontFace = new FontFace(fontName, `url(${event.target.result})`);
-      fontFace.load().then((loadedFont) => {
-        document.fonts.add(loadedFont);
-        setCustomFont(fontName);
-        setSettings(s => ({ ...s, font: fontName }));
-      }).catch(() => alert('Font loading failed'));
+    const initMIDI = async () => {
+      try {
+        const access = await navigator.requestMIDIAccess();
+        midiAccessRef.current = access;
+        
+        const devices = [];
+        for (const input of access.inputs.values()) {
+          devices.push(input.name);
+          
+          input.onmidimessage = (event) => {
+            const [status, note, velocity] = event.data;
+            const command = status >> 4;
+            
+            if (command === 9 && velocity > 0) {
+              midiNoteRef.current = note;
+              midiVelocityRef.current = velocity / 127;
+              distortionMultiplier.current = 1 + (velocity / 127) * settings.midiSensitivity * 2;
+            } else if (command === 8 || (command === 9 && velocity === 0)) {
+              midiVelocityRef.current = 0;
+              distortionMultiplier.current = 1;
+            }
+          };
+        }
+        setMidiDevices(devices);
+      } catch (err) {
+        console.error('MIDI failed');
+      }
     };
-    reader.readAsDataURL(file);
-  };
 
+    initMIDI();
+  }, [midiEnabled, settings.midiSensitivity]);
+
+  // Audio
   React.useEffect(() => {
     if (!audioEnabled) {
       if (audioContextRef.current) audioContextRef.current.close();
@@ -250,6 +162,7 @@ const PixelMoireGenerator = () => {
       speedMultiplier.current = 1;
       return;
     }
+    
     const initAudio = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -260,6 +173,7 @@ const PixelMoireGenerator = () => {
         analyser.fftSize = 2048;
         analyserRef.current = analyser;
         source.connect(analyser);
+        
         const updateAudio = () => {
           if (!analyserRef.current) return;
           const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
@@ -269,10 +183,8 @@ const PixelMoireGenerator = () => {
           const overall = dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
           setAudioLevel(overall);
           setBassLevel(bassAvg);
-          const targetIntensity = 1.0 + (overall * sensitivityRef.current * 0.5);
-          distortionMultiplier.current = distortionMultiplier.current + (targetIntensity - distortionMultiplier.current) * 0.1;
-          const targetSpeed = 1.0 + (overall * sensitivityRef.current * 0.5);
-          speedMultiplier.current = speedMultiplier.current + (targetSpeed - speedMultiplier.current) * 0.1;
+          distortionMultiplier.current = 1.0 + overall * sensitivityRef.current * 0.5;
+          speedMultiplier.current = 1.0 + overall * sensitivityRef.current * 0.5;
           requestAnimationFrame(updateAudio);
         };
         updateAudio();
@@ -305,6 +217,7 @@ const PixelMoireGenerator = () => {
     const freq = 0.01;
     const t = time || 0;
     let dx = 0, dy = 0;
+    
     switch (type) {
       case 'liquify':
         dx = noise((x + t * 50) * freq, y * freq) * strength;
@@ -339,8 +252,132 @@ const PixelMoireGenerator = () => {
         dy = Math.cos(x * freq * 3 - t * 0.5) * strength;
         break;
     }
+    
     return { x: dx, y: dy };
   };
+
+  const generateRandomGrid = () => {
+    const cells = [];
+    const totalCells = settings.gridColumns * settings.gridRows;
+    const numElements = Math.floor(totalCells * 0.3);
+    const usedIndices = new Set();
+    
+    for (let i = 0; i < numElements; i++) {
+      let index;
+      do {
+        index = Math.floor(Math.random() * totalCells);
+      } while (usedIndices.has(index));
+      
+      usedIndices.add(index);
+      cells.push({
+        index: index,
+        type: ['char', 'dot', 'square'][Math.floor(Math.random() * 3)]
+      });
+    }
+    setGridCells(cells);
+  };
+  
+  const getCellFromClick = (canvasX, canvasY) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const cellWidth = canvas.width / settings.gridColumns;
+    const cellHeight = canvas.height / settings.gridRows;
+    const col = Math.floor(canvasX / cellWidth);
+    const row = Math.floor(canvasY / cellHeight);
+    if (col >= 0 && col < settings.gridColumns && row >= 0 && row < settings.gridRows) {
+      return row * settings.gridColumns + col;
+    }
+    return null;
+  };
+  
+  const handleCanvasClick = (e) => {
+    if (settings.patternType !== 'swiss-grid') return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = x * scaleX;
+    const canvasY = y * scaleY;
+    const cellIndex = getCellFromClick(canvasX, canvasY);
+    
+    if (cellIndex === null) return;
+    
+    if (settings.drawMode) {
+      setGridCells(prev => {
+        const existing = prev.findIndex(c => c.index === cellIndex);
+        if (existing === -1) {
+          return [...prev, { index: cellIndex, type: settings.selectedElement }];
+        }
+        return prev;
+      });
+    } else {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, cellIndex });
+    }
+  };
+  
+  const handleCanvasMouseDown = (e) => {
+    if (settings.patternType === 'swiss-grid' && settings.drawMode) {
+      setIsDrawing(true);
+      handleCanvasClick(e);
+    }
+  };
+  
+  const handleCanvasMouseMove = (e) => {
+    if (!isDrawing || settings.patternType !== 'swiss-grid' || !settings.drawMode) return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = x * scaleX;
+    const canvasY = y * scaleY;
+    const cellIndex = getCellFromClick(canvasX, canvasY);
+    
+    if (cellIndex !== null) {
+      setGridCells(prev => {
+        const existing = prev.findIndex(c => c.index === cellIndex);
+        if (existing === -1) {
+          return [...prev, { index: cellIndex, type: settings.selectedElement }];
+        }
+        return prev;
+      });
+    }
+  };
+  
+  const handleCanvasMouseUp = () => {
+    setIsDrawing(false);
+  };
+  
+  const addElement = (type) => {
+    if (contextMenu) {
+      const existing = gridCells.findIndex(c => c.index === contextMenu.cellIndex);
+      if (existing >= 0) {
+        const newCells = [...gridCells];
+        newCells[existing] = { index: contextMenu.cellIndex, type };
+        setGridCells(newCells);
+      } else {
+        setGridCells([...gridCells, { index: contextMenu.cellIndex, type }]);
+      }
+      setContextMenu(null);
+    }
+  };
+  
+  const removeElement = () => {
+    if (contextMenu) {
+      setGridCells(gridCells.filter(c => c.index !== contextMenu.cellIndex));
+      setContextMenu(null);
+    }
+  };
+  
+  React.useEffect(() => {
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, []);
 
   const render = (time = 0) => {
     const canvas = canvasRef.current;
@@ -348,204 +385,16 @@ const PixelMoireGenerator = () => {
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
+    
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
-    const animTime = time * 0.001 * settings.distortionSpeed * speedMultiplier.current;
-    const audioDistortionStrength = settings.distortionStrength * distortionMultiplier.current;
-    const audioDotSize = settings.dotSize * (1 + bassLevel * sensitivityRef.current * 0.5);
-    const audioShapeSize = settings.shapeSize * (1 + bassLevel * sensitivityRef.current * 0.5);
     
-    if (settings.patternType === 'dots') {
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          ctx.beginPath();
-          ctx.arc(drawX, drawY, audioDotSize, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-    } else if (settings.patternType === 'custom-svg' && svgImageRef.current) {
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          const size = audioShapeSize * settings.customSvgScale;
-          ctx.save();
-          ctx.translate(drawX, drawY);
-          ctx.scale(1 + bassLevel * sensitivityRef.current * 0.3, 1 + bassLevel * sensitivityRef.current * 0.3);
-          ctx.drawImage(svgImageRef.current, -size/2, -size/2, size, size);
-          ctx.restore();
-        }
-      }
-    } else if (settings.patternType === 'squares') {
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          const halfSize = audioShapeSize / 2;
-          ctx.fillRect(drawX - halfSize, drawY - halfSize, audioShapeSize, audioShapeSize);
-        }
-      }
-    } else if (settings.patternType === 'triangles') {
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          ctx.beginPath();
-          ctx.moveTo(drawX, drawY - audioShapeSize);
-          ctx.lineTo(drawX + audioShapeSize, drawY + audioShapeSize);
-          ctx.lineTo(drawX - audioShapeSize, drawY + audioShapeSize);
-          ctx.closePath();
-          ctx.fill();
-        }
-      }
-    } else if (settings.patternType === 'text') {
-      ctx.font = `${settings.fontSize}px "${settings.font}", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          ctx.save();
-          ctx.translate(drawX, drawY);
-          ctx.scale(1 + bassLevel * sensitivityRef.current * 0.3, 1 + bassLevel * sensitivityRef.current * 0.3);
-          ctx.fillText(settings.text, 0, 0);
-          ctx.restore();
-        }
-      }
-    } else if (settings.patternType === 'char-grid') {
-      ctx.font = `${settings.charGridSize}px "${settings.font}", monospace`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const chars = settings.charSequence.split('');
-      if (chars.length === 0) return;
-      
-      // FIXED: Use raw time in seconds for smoother cycling
-      const cycleTime = time * 0.001 * settings.charCycleSpeed * 0.5;
-      const globalOffset = Math.floor(cycleTime);
-      
-      let rowIndex = 0;
-      for (let y = 0; y < height; y += settings.spacing) {
-        let colIndex = 0;
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          
-          // Each position offset by its grid location, plus global time offset
-          const posOffset = rowIndex * 7 + colIndex * 3; // creates variety
-          const charIndex = (posOffset + globalOffset) % chars.length;
-          const char = chars[charIndex];
-          
-          ctx.save();
-          ctx.translate(drawX, drawY);
-          const scale = 1 + (audioEnabled ? bassLevel * sensitivityRef.current * 0.3 : 0);
-          ctx.scale(scale, scale);
-          ctx.fillText(char, 0, 0);
-          ctx.restore();
-          
-          colIndex++;
-        }
-        rowIndex++;
-      }
-    } else if (settings.patternType === 'swiss-grid') {
-      const cellWidth = width / settings.gridColumns;
-      const cellHeight = height / settings.gridRows;
-      
-      // Draw grid lines
-      ctx.strokeStyle = '#cccccc';
-      ctx.lineWidth = 1;
-      for (let i = 0; i <= settings.gridColumns; i++) {
-        ctx.beginPath();
-        ctx.moveTo(i * cellWidth, 0);
-        ctx.lineTo(i * cellWidth, height);
-        ctx.stroke();
-      }
-      for (let i = 0; i <= settings.gridRows; i++) {
-        ctx.beginPath();
-        ctx.moveTo(0, i * cellHeight);
-        ctx.lineTo(width, i * cellHeight);
-        ctx.stroke();
-      }
-      
-      // Draw elements in filled cells
-      ctx.fillStyle = '#000000';
-      ctx.strokeStyle = '#000000';
-      const chars = settings.charSequence.split('');
-      const cycleTime = time * 0.001 * settings.charCycleSpeed * 0.5;
-      const globalOffset = Math.floor(cycleTime);
-      
-      gridCells.forEach(cell => {
-        const col = cell.index % settings.gridColumns;
-        const row = Math.floor(cell.index / settings.gridColumns);
-        const x = col * cellWidth + cellWidth / 2;
-        const y = row * cellHeight + cellHeight / 2;
-        
-        let drawX = x, drawY = y;
-        if (settings.distortionEnabled) {
-          const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
-          drawX += d.x;
-          drawY += d.y;
-        }
-        
-        const scale = 1 + (audioEnabled ? bassLevel * sensitivityRef.current * 0.3 : 0);
-        
-        if (cell.type === 'char' && chars.length > 0) {
-          ctx.font = `${settings.charGridSize}px "${settings.font}", monospace`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = '#000000';
-          const charIndex = (cell.index + globalOffset) % chars.length;
-          ctx.save();
-          ctx.translate(drawX, drawY);
-          ctx.scale(scale, scale);
-          ctx.fillText(chars[charIndex], 0, 0);
-          ctx.restore();
-        } else if (cell.type === 'dot') {
-          ctx.fillStyle = '#000000';
-          ctx.beginPath();
-          ctx.arc(drawX, drawY, 12 * scale, 0, Math.PI * 2);
-          ctx.fill();
-        } else if (cell.type === 'square') {
-          ctx.fillStyle = '#000000';
-          const size = 30 * scale;
-          ctx.fillRect(drawX - size/2, drawY - size/2, size, size);
-        } else if (cell.type === 'line') {
-          ctx.strokeStyle = '#000000';
-          ctx.lineWidth = 4;
-          ctx.beginPath();
-          ctx.moveTo(drawX - 20, drawY);
-          ctx.lineTo(drawX + 20, drawY);
-          ctx.stroke();
-        }
-      });
-    } else if (settings.patternType === 'vertical-lines') {
+    const animTime = time * 0.001 * settings.distortionSpeed * speedMultiplier.current;
+    const midiInfluence = midiVelocityRef.current * settings.midiSensitivity;
+    const audioDistortionStrength = settings.distortionStrength * distortionMultiplier.current;
+    
+    if (settings.patternType === 'vertical-lines') {
       for (let x = 0; x < width; x += settings.spacing) {
         ctx.beginPath();
         for (let y = 0; y < height; y++) {
@@ -577,41 +426,228 @@ const PixelMoireGenerator = () => {
         ctx.lineWidth = settings.lineThickness;
         ctx.stroke();
       }
-    } else if (settings.patternType === 'checkerboard') {
-      const cellSize = settings.spacing;
-      for (let y = 0; y < height; y += cellSize) {
-        for (let x = 0; x < width; x += cellSize) {
-          if ((Math.floor(x / cellSize) + Math.floor(y / cellSize)) % 2 === 0) {
-            ctx.fillRect(x, y, cellSize, cellSize);
+    } else if (settings.patternType === 'dots') {
+      const dotSize = settings.dotSize * (1 + (bassLevel + midiInfluence) * 0.5);
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
           }
+          ctx.beginPath();
+          ctx.arc(drawX, drawY, dotSize, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
-    }
-    
-    if (settings.pixelationEnabled) {
-      const pixelSize = Math.round(settings.pixelSize + (bassLevel * sensitivityRef.current * 4));
-      const imageData = ctx.getImageData(0, 0, width, height);
-      const pixelated = ctx.createImageData(width, height);
-      for (let y = 0; y < height; y += pixelSize) {
-        for (let x = 0; x < width; x += pixelSize) {
-          const sampleX = Math.min(x + Math.floor(pixelSize / 2), width - 1);
-          const sampleY = Math.min(y + Math.floor(pixelSize / 2), height - 1);
-          const idx = (sampleY * width + sampleX) * 4;
-          const r = imageData.data[idx];
-          const g = imageData.data[idx + 1];
-          const b = imageData.data[idx + 2];
-          const a = imageData.data[idx + 3];
-          for (let py = y; py < Math.min(y + pixelSize, height); py++) {
-            for (let px = x; px < Math.min(x + pixelSize, width); px++) {
-              const i = (py * width + px) * 4;
-              pixelated.data[i] = r;
-              pixelated.data[i + 1] = g;
-              pixelated.data[i + 2] = b;
-              pixelated.data[i + 3] = a;
+    } else if (settings.patternType === 'squares') {
+      const shapeSize = settings.shapeSize * (1 + (bassLevel + midiInfluence) * 0.5);
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          const halfSize = shapeSize / 2;
+          ctx.fillRect(drawX - halfSize, drawY - halfSize, shapeSize, shapeSize);
+        }
+      }
+    } else if (settings.patternType === 'text') {
+      ctx.font = `${settings.fontSize}px "${settings.font}", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let y = 0; y < height; y += settings.spacing) {
+        for (let x = 0; x < width; x += settings.spacing) {
+          let drawX = x, drawY = y;
+          if (settings.distortionEnabled) {
+            const d = getDistortion(x - width/2, y - height/2, animTime, audioDistortionStrength, settings.distortionType);
+            drawX += d.x;
+            drawY += d.y;
+          }
+          ctx.save();
+          ctx.translate(drawX, drawY);
+          ctx.scale(1 + (bassLevel + midiInfluence) * 0.3, 1 + (bassLevel + midiInfluence) * 0.3);
+          ctx.fillText(settings.text, 0, 0);
+          ctx.restore();
+        }
+      }
+    } else if (settings.patternType === 'char-grid') {
+      ctx.font = `${settings.charGridSize}px "${settings.font}", monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const chars = settings.charSequence.split('');
+      if (chars.length > 0) {
+        const cycleTime = time * 0.001 * settings.charCycleSpeed;
+        
+        let rowIndex = 0;
+        for (let y = 0; y < height; y += settings.spacing) {
+          let colIndex = 0;
+          for (let x = 0; x < width; x += settings.spacing) {
+            const posOffset = rowIndex * 7 + colIndex * 3;
+            const charIndex = (posOffset + Math.floor(cycleTime)) % chars.length;
+            const char = chars[charIndex];
+            
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.scale(1 + (bassLevel + midiInfluence) * 0.3, 1 + (bassLevel + midiInfluence) * 0.3);
+            ctx.fillText(char, 0, 0);
+            ctx.restore();
+            
+            colIndex++;
+          }
+          rowIndex++;
+        }
+      }
+    } else if (settings.patternType === 'swiss-grid') {
+      const cellWidth = width / settings.gridColumns;
+      const cellHeight = height / settings.gridRows;
+      
+      if (settings.showGridLines) {
+        ctx.strokeStyle = '#cccccc';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= settings.gridColumns; i++) {
+          ctx.beginPath();
+          ctx.moveTo(i * cellWidth, 0);
+          ctx.lineTo(i * cellWidth, height);
+          ctx.stroke();
+        }
+        for (let i = 0; i <= settings.gridRows; i++) {
+          ctx.beginPath();
+          ctx.moveTo(0, i * cellHeight);
+          ctx.lineTo(width, i * cellHeight);
+          ctx.stroke();
+        }
+      }
+      
+      const chars = settings.charSequence.split('');
+      const cycleTime = time * 0.001 * settings.charCycleSpeed;
+      
+      gridCells.forEach(cell => {
+        const col = cell.index % settings.gridColumns;
+        const row = Math.floor(cell.index / settings.gridColumns);
+        const centerX = col * cellWidth + cellWidth / 2;
+        const centerY = row * cellHeight + cellHeight / 2;
+        
+        // Generative morphing parameters
+        const morphPhase = (cycleTime + cell.index * 0.1) % 1;
+        const easedMorph = applyEasing(morphPhase);
+        
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        
+        if (cell.type === 'char' && chars.length > 0) {
+          ctx.font = `${settings.charGridSize}px "${settings.font}", monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          
+          // Morph between characters smoothly
+          const charIndexFloat = (cycleTime + cell.index * 0.2) % chars.length;
+          const currentIndex = Math.floor(charIndexFloat);
+          const nextIndex = (currentIndex + 1) % chars.length;
+          const morphProgress = charIndexFloat - currentIndex;
+          const easedProgress = applyEasing(morphProgress);
+          
+          // Fade out current char
+          ctx.globalAlpha = 1 - easedProgress;
+          const scale1 = 1 - easedProgress * 0.3;
+          ctx.scale(scale1, scale1);
+          ctx.fillText(chars[currentIndex], 0, 0);
+          
+          // Fade in next char
+          ctx.scale(1/scale1, 1/scale1);
+          ctx.globalAlpha = easedProgress;
+          const scale2 = 0.7 + easedProgress * 0.3;
+          ctx.scale(scale2, scale2);
+          ctx.fillText(chars[nextIndex], 0, 0);
+          
+        } else if (cell.type === 'dot') {
+          // Morph: circle → star → pentagon → circle
+          const sides = 3 + morphPhase * 5; // 3 to 8 sides
+          const radius = 12;
+          const innerRadius = radius * (0.5 + easedMorph * 0.3);
+          
+          ctx.beginPath();
+          for (let i = 0; i < Math.floor(sides) * 2; i++) {
+            const angle = (i * Math.PI) / Math.floor(sides);
+            const r = i % 2 === 0 ? radius : innerRadius;
+            const x = Math.cos(angle) * r;
+            const y = Math.sin(angle) * r;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          
+        } else if (cell.type === 'square') {
+          // Morph: square → octagon → circle → triangle → square
+          const size = 30;
+          const phase = morphPhase * 4; // 4 distinct shapes
+          
+          if (phase < 1) {
+            // Square to octagon
+            const t = applyEasing(phase);
+            const cut = t * 8;
+            ctx.beginPath();
+            ctx.moveTo(-size/2 + cut, -size/2);
+            ctx.lineTo(size/2 - cut, -size/2);
+            ctx.lineTo(size/2, -size/2 + cut);
+            ctx.lineTo(size/2, size/2 - cut);
+            ctx.lineTo(size/2 - cut, size/2);
+            ctx.lineTo(-size/2 + cut, size/2);
+            ctx.lineTo(-size/2, size/2 - cut);
+            ctx.lineTo(-size/2, -size/2 + cut);
+            ctx.closePath();
+            ctx.fill();
+          } else if (phase < 2) {
+            // Octagon to circle
+            const t = applyEasing(phase - 1);
+            const sides = Math.floor(8 + t * 24); // 8 to 32 sides (approaches circle)
+            ctx.beginPath();
+            for (let i = 0; i < sides; i++) {
+              const angle = (i * 2 * Math.PI) / sides;
+              const x = Math.cos(angle) * size/2;
+              const y = Math.sin(angle) * size/2;
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
             }
+            ctx.closePath();
+            ctx.fill();
+          } else if (phase < 3) {
+            // Circle to triangle
+            const t = applyEasing(phase - 2);
+            const sides = Math.floor(32 - t * 29); // 32 to 3 sides
+            ctx.beginPath();
+            for (let i = 0; i < sides; i++) {
+              const angle = (i * 2 * Math.PI) / sides;
+              const x = Math.cos(angle) * size/2;
+              const y = Math.sin(angle) * size/2;
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.fill();
+          } else {
+            // Triangle to square
+            const t = applyEasing(phase - 3);
+            const sides = Math.floor(3 + t * 1); // 3 to 4 sides
+            ctx.beginPath();
+            for (let i = 0; i < sides; i++) {
+              const angle = (i * 2 * Math.PI) / sides - Math.PI/2;
+              const x = Math.cos(angle) * size/2;
+              const y = Math.sin(angle) * size/2;
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.fill();
           }
         }
-      }
+        
+        ctx.restore();
+      });
       ctx.putImageData(pixelated, 0, 0);
     }
   };
@@ -623,7 +659,7 @@ const PixelMoireGenerator = () => {
     };
     animationRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [settings, gridCells]); // Added gridCells dependency
+  }, [settings, gridCells]);
 
   React.useEffect(() => {
     const handleResize = () => {
@@ -642,7 +678,7 @@ const PixelMoireGenerator = () => {
     <div className="w-full h-screen bg-gray-100 flex">
       <div className="w-80 bg-white shadow-lg p-4 overflow-y-auto space-y-4">
         <div className="flex gap-2">
-          <button onClick={() => setSettings(s => ({ ...s, lineThickness: Math.random() * 15 + 5, spacing: Math.random() * 30 + 15 }))} className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
+          <button onClick={() => setSettings(s => ({ ...s, lineThickness: Math.random() * 15 + 5 }))} className="flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded text-sm">
             <RotateCcw size={14} /> Random
           </button>
           <button onClick={() => { const link = document.createElement('a'); link.download = 'pattern.png'; link.href = canvasRef.current.toDataURL(); link.click(); }} className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">
@@ -650,25 +686,14 @@ const PixelMoireGenerator = () => {
           </button>
         </div>
 
-        <div className="bg-yellow-200 border-2 border-red-500 p-3 rounded text-xs font-mono">
-          <div className="font-bold mb-2">DEBUG:</div>
-          <div>Audio: {audioLevel.toFixed(3)}</div>
-          <div>Bass: {bassLevel.toFixed(3)}</div>
-          <div>Intensity: {distortionMultiplier.current.toFixed(2)}x</div>
-          <div>Speed: {speedMultiplier.current.toFixed(2)}x</div>
-          {settings.patternType === 'char-grid' && (
-            <>
-              <div>Chars: "{settings.charSequence}"</div>
-              <div>Char count: {settings.charSequence.length}</div>
-            </>
-          )}
-          {settings.patternType === 'swiss-grid' && (
-            <>
-              <div>Draw Mode: {settings.drawMode ? 'ON' : 'OFF'}</div>
-              <div>Drawing: {isDrawing ? 'YES' : 'NO'}</div>
-              <div>Elements: {gridCells.length}</div>
-              <div>Selected: {settings.selectedElement}</div>
-            </>
+        <div>
+          <h3 className="font-semibold mb-2">MIDI</h3>
+          <label className="flex items-center mb-2">
+            <input type="checkbox" checked={midiEnabled} onChange={(e) => setMidiEnabled(e.target.checked)} className="mr-2" />
+            Enable MIDI
+          </label>
+          {midiEnabled && midiDevices.length > 0 && (
+            <div className="text-xs text-green-600">{midiDevices.length} device(s) connected</div>
           )}
         </div>
 
@@ -676,208 +701,124 @@ const PixelMoireGenerator = () => {
           <h3 className="font-semibold mb-2">Audio</h3>
           <label className="flex items-center mb-2">
             <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} className="mr-2" />
-            Enable Audio Input
+            Enable Audio
           </label>
-          {audioEnabled && (
-            <div className="space-y-2">
-              <div>
-                <label className="block text-xs mb-1">Sensitivity: {settings.audioSensitivity.toFixed(2)}x</label>
-                <input type="range" min="0.1" max="3" step="0.1" value={settings.audioSensitivity} onChange={(e) => { const val = parseFloat(e.target.value); setSettings(s => ({ ...s, audioSensitivity: val })); sensitivityRef.current = val; }} className="w-full" />
-                <div className="text-xs text-gray-500 mt-1">Controls distortion intensity</div>
-              </div>
-              <div className="text-xs">Level: {(audioLevel * 100).toFixed(0)}%</div>
-              <div className="w-full bg-gray-200 rounded h-2">
-                <div className="bg-blue-500 h-2 rounded" style={{ width: `${audioLevel * 100}%` }} />
-              </div>
-            </div>
-          )}
         </div>
 
         <div>
           <h3 className="font-semibold mb-2">Pattern</h3>
-          <select value={settings.patternType} onChange={(e) => setSettings(s => ({ ...s, patternType: e.target.value }))} className="w-full p-2 border rounded mb-2 text-sm">
+          <select value={settings.patternType} onChange={(e) => setSettings(s => ({ ...s, patternType: e.target.value }))} className="w-full p-2 border rounded text-sm">
             <option value="vertical-lines">Vertical Lines</option>
             <option value="horizontal-lines">Horizontal Lines</option>
-            <option value="checkerboard">Checkerboard</option>
             <option value="dots">Dots</option>
             <option value="squares">Squares</option>
-            <option value="triangles">Triangles</option>
             <option value="text">Text</option>
             <option value="char-grid">Character Grid</option>
-            <option value="swiss-grid">Swiss Grid System</option>
-            <option value="custom-svg">Custom SVG Shape</option>
+            <option value="swiss-grid">Swiss Grid</option>
           </select>
-          
-          {settings.patternType === 'custom-svg' && (
-            <div className="space-y-2 mb-2">
-              <label className="block">
-                <div className="text-sm mb-1">Upload SVG File</div>
-                <input type="file" accept=".svg" onChange={handleSvgUpload} className="w-full text-xs p-2 border rounded" />
-              </label>
-              {customSvg && (
-                <>
-                  <div className="text-xs text-green-600">✓ SVG loaded</div>
-                  <div>
-                    <label className="block text-sm mb-1">SVG Scale: {settings.customSvgScale.toFixed(1)}x</label>
-                    <input type="range" min="0.5" max="3" step="0.1" value={settings.customSvgScale} onChange={(e) => setSettings(s => ({ ...s, customSvgScale: parseFloat(e.target.value) }))} className="w-full" />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-          
-          {(settings.patternType === 'vertical-lines' || settings.patternType === 'horizontal-lines') && (
+        </div>
+
+        {settings.patternType === 'vertical-lines' && (
+          <div>
+            <label className="block text-sm">Thickness: {settings.lineThickness.toFixed(1)}</label>
+            <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(s => ({ ...s, lineThickness: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+        )}
+        
+        {settings.patternType === 'horizontal-lines' && (
+          <div>
+            <label className="block text-sm">Thickness: {settings.lineThickness.toFixed(1)}</label>
+            <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(s => ({ ...s, lineThickness: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+        )}
+
+        {settings.patternType === 'text' && (
+          <div className="space-y-2">
             <div>
-              <label className="block text-sm mb-1">Thickness: {settings.lineThickness.toFixed(1)}</label>
-              <input type="range" min="2" max="30" value={settings.lineThickness} onChange={(e) => setSettings(s => ({ ...s, lineThickness: parseFloat(e.target.value) }))} className="w-full mb-2" />
+              <label className="block text-sm">Text</label>
+              <input type="text" value={settings.text} onChange={(e) => setSettings(s => ({ ...s, text: e.target.value }))} className="w-full p-2 border rounded text-sm" />
             </div>
-          )}
-          
-          {settings.patternType === 'dots' && (
             <div>
-              <label className="block text-sm mb-1">Dot Size: {settings.dotSize.toFixed(1)}</label>
-              <input type="range" min="2" max="20" value={settings.dotSize} onChange={(e) => setSettings(s => ({ ...s, dotSize: parseFloat(e.target.value) }))} className="w-full mb-2" />
+              <label className="block text-sm">Font Size: {settings.fontSize}</label>
+              <input type="range" min="20" max="100" value={settings.fontSize} onChange={(e) => setSettings(s => ({ ...s, fontSize: parseInt(e.target.value) }))} className="w-full" />
             </div>
-          )}
-          
-          {(settings.patternType === 'squares' || settings.patternType === 'triangles') && (
-            <div>
-              <label className="block text-sm mb-1">Shape Size: {settings.shapeSize.toFixed(1)}</label>
-              <input type="range" min="4" max="30" value={settings.shapeSize} onChange={(e) => setSettings(s => ({ ...s, shapeSize: parseFloat(e.target.value) }))} className="w-full mb-2" />
-            </div>
-          )}
-          
-          {settings.patternType === 'text' && (
-            <div className="space-y-2">
-              <div>
-                <label className="block text-sm mb-1">Text</label>
-                <input type="text" value={settings.text} onChange={(e) => setSettings(s => ({ ...s, text: e.target.value }))} className="w-full p-2 border rounded text-sm" />
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Font</label>
-                <select value={settings.font} onChange={(e) => setSettings(s => ({ ...s, font: e.target.value }))} className="w-full p-2 border rounded text-sm">
-                  {googleFonts.map(font => <option key={font} value={font}>{font}</option>)}
-                  {customFont && <option value={customFont}>Custom Font</option>}
-                </select>
-              </div>
-              <div>
-                <label className="block">
-                  <div className="text-sm mb-1">Upload Custom Font (.ttf, .otf, .woff)</div>
-                  <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} className="w-full text-xs p-2 border rounded" />
-                </label>
-                {customFont && <div className="text-xs text-green-600">✓ Custom font loaded</div>}
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Font Size: {settings.fontSize}</label>
-                <input type="range" min="20" max="100" value={settings.fontSize} onChange={(e) => setSettings(s => ({ ...s, fontSize: parseInt(e.target.value) }))} className="w-full" />
-              </div>
-            </div>
-          )}
-          
-          {settings.patternType === 'char-grid' && (
-            <div className="space-y-2">
-              <div>
-                <label className="block text-sm mb-1">Character Sequence</label>
-                <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc or !@#$" />
-                <div className="text-xs text-gray-500 mt-1">Characters cycle continuously (e.g., "01", "█▓▒░", "!@#$%")</div>
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Font</label>
-                <select value={settings.font} onChange={(e) => setSettings(s => ({ ...s, font: e.target.value }))} className="w-full p-2 border rounded text-sm">
-                  {googleFonts.map(font => <option key={font} value={font}>{font}</option>)}
-                  {customFont && <option value={customFont}>Custom Font</option>}
-                </select>
-              </div>
-              <div>
-                <label className="block">
-                  <div className="text-sm mb-1">Upload Custom Font (.ttf, .otf, .woff)</div>
-                  <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} className="w-full text-xs p-2 border rounded" />
-                </label>
-                {customFont && <div className="text-xs text-green-600">✓ Custom font loaded</div>}
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Character Size: {settings.charGridSize}</label>
-                <input type="range" min="10" max="60" value={settings.charGridSize} onChange={(e) => setSettings(s => ({ ...s, charGridSize: parseInt(e.target.value) }))} className="w-full" />
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Cycle Speed: {settings.charCycleSpeed}</label>
-                <input type="range" min="1" max="20" value={settings.charCycleSpeed} onChange={(e) => setSettings(s => ({ ...s, charCycleSpeed: parseInt(e.target.value) }))} className="w-full" />
-                <div className="text-xs text-gray-500 mt-1">How fast characters cycle</div>
-              </div>
-            </div>
-          )}
-          
-          {settings.patternType === 'swiss-grid' && (
-            <div className="space-y-2">
-              <div>
-                <label className="block text-sm mb-1">Grid Preset</label>
-                <select value={settings.gridPreset} onChange={(e) => {
-                  const preset = gridPresets.find(p => p.name === e.target.value);
-                  if (preset) {
-                    setSettings(s => ({ ...s, gridPreset: e.target.value, gridColumns: preset.cols, gridRows: preset.rows }));
-                  }
-                }} className="w-full p-2 border rounded text-sm">
-                  {gridPresets.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Columns: {settings.gridColumns}</label>
-                <input type="range" min="2" max="20" value={settings.gridColumns} onChange={(e) => setSettings(s => ({ ...s, gridColumns: parseInt(e.target.value), gridPreset: 'Custom' }))} className="w-full" />
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Rows: {settings.gridRows}</label>
-                <input type="range" min="2" max="20" value={settings.gridRows} onChange={(e) => setSettings(s => ({ ...s, gridRows: parseInt(e.target.value), gridPreset: 'Custom' }))} className="w-full" />
-              </div>
-              
-              <div className="border-t pt-2 mt-2">
-                <h4 className="font-semibold mb-2 text-sm">Interaction Mode</h4>
-                <label className="flex items-center mb-2">
-                  <input type="checkbox" checked={settings.drawMode} onChange={(e) => setSettings(s => ({ ...s, drawMode: e.target.checked }))} className="mr-2" />
-                  Draw Mode (Click & Drag)
-                </label>
-                {settings.drawMode && (
-                  <div>
-                    <label className="block text-sm mb-1">Brush Element</label>
-                    <select value={settings.selectedElement} onChange={(e) => setSettings(s => ({ ...s, selectedElement: e.target.value }))} className="w-full p-2 border rounded text-sm">
-                      <option value="char">Character</option>
-                      <option value="dot">Dot</option>
-                      <option value="square">Square</option>
-                      <option value="line">Line</option>
-                    </select>
-                  </div>
-                )}
-                <div className="text-xs text-gray-500 mt-1">
-                  {settings.drawMode ? 'Click and drag to paint elements' : 'Click cells for popup menu'}
-                </div>
-              </div>
-              
-              <div className="border-t pt-2 mt-2">
-                <button onClick={generateRandomGrid} className="w-full px-3 py-2 bg-blue-500 text-white rounded text-sm mb-2">
-                  Generate Random Pattern
-                </button>
-                <button onClick={() => setGridCells([])} className="w-full px-3 py-2 bg-red-500 text-white rounded text-sm">
-                  Clear Grid
-                </button>
-              </div>
-              
-              <div className="border-t pt-2 mt-2">
-                <label className="block text-sm mb-1">Character Sequence</label>
-                <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc" />
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Character Size: {settings.charGridSize}</label>
-                <input type="range" min="10" max="60" value={settings.charGridSize} onChange={(e) => setSettings(s => ({ ...s, charGridSize: parseInt(e.target.value) }))} className="w-full" />
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Cycle Speed: {settings.charCycleSpeed}</label>
-                <input type="range" min="1" max="20" value={settings.charCycleSpeed} onChange={(e) => setSettings(s => ({ ...s, charCycleSpeed: parseInt(e.target.value) }))} className="w-full" />
-              </div>
-            </div>
-          )}
-          
-          <label className="block text-sm mb-1">Spacing: {settings.spacing.toFixed(1)}</label>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-sm">Spacing: {settings.spacing.toFixed(1)}</label>
           <input type="range" min="10" max="60" value={settings.spacing} onChange={(e) => setSettings(s => ({ ...s, spacing: parseFloat(e.target.value) }))} className="w-full" />
         </div>
+
+        {settings.patternType === 'char-grid' && (
+          <div className="space-y-2">
+            <div>
+              <label className="block text-sm">Character Sequence</label>
+              <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" />
+            </div>
+            <div>
+              <label className="block text-sm">Size: {settings.charGridSize}</label>
+              <input type="range" min="10" max="60" value={settings.charGridSize} onChange={(e) => setSettings(s => ({ ...s, charGridSize: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
+        )}
+
+        {settings.patternType === 'swiss-grid' && (
+          <div className="space-y-2">
+            <div>
+              <label className="block text-sm">Grid Preset</label>
+              <select value={settings.gridPreset} onChange={(e) => {
+                const preset = gridPresets.find(p => p.name === e.target.value);
+                if (preset) {
+                  setSettings(s => ({ ...s, gridPreset: e.target.value, gridColumns: preset.cols, gridRows: preset.rows }));
+                }
+              }} className="w-full p-2 border rounded text-sm">
+                {gridPresets.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm">Columns: {settings.gridColumns}</label>
+              <input type="range" min="2" max="60" value={settings.gridColumns} onChange={(e) => setSettings(s => ({ ...s, gridColumns: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+            <div>
+              <label className="block text-sm">Rows: {settings.gridRows}</label>
+              <input type="range" min="2" max="60" value={settings.gridRows} onChange={(e) => setSettings(s => ({ ...s, gridRows: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+            <div>
+              <label className="flex items-center">
+                <input type="checkbox" checked={settings.showGridLines} onChange={(e) => setSettings(s => ({ ...s, showGridLines: e.target.checked }))} className="mr-2" />
+                Show Grid Lines
+              </label>
+            </div>
+            <div className="border-t pt-2">
+              <h4 className="font-semibold text-sm mb-2">Draw Mode</h4>
+              <label className="flex items-center mb-2">
+                <input type="checkbox" checked={settings.drawMode} onChange={(e) => setSettings(s => ({ ...s, drawMode: e.target.checked }))} className="mr-2" />
+                Enable (Click & Drag)
+              </label>
+              {settings.drawMode && (
+                <div>
+                  <label className="block text-sm">Brush Element</label>
+                  <select value={settings.selectedElement} onChange={(e) => setSettings(s => ({ ...s, selectedElement: e.target.value }))} className="w-full p-2 border rounded text-sm">
+                    <option value="char">Character</option>
+                    <option value="dot">Dot</option>
+                    <option value="square">Square</option>
+                  </select>
+                </div>
+              )}
+            </div>
+            <button onClick={generateRandomGrid} className="w-full px-3 py-2 bg-blue-500 text-white rounded text-sm">
+              Generate Random
+            </button>
+            <button onClick={() => setGridCells([])} className="w-full px-3 py-2 bg-red-500 text-white rounded text-sm">
+              Clear Grid
+            </button>
+            <div>
+              <label className="block text-sm">Character Sequence</label>
+              <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full p-2 border rounded text-sm font-mono" placeholder="01 or abc" />
+            </div>
+          </div>
+        )}
 
         <div>
           <h3 className="font-semibold mb-2">Distortion</h3>
@@ -890,32 +831,37 @@ const PixelMoireGenerator = () => {
               <select value={settings.distortionType} onChange={(e) => setSettings(s => ({ ...s, distortionType: e.target.value }))} className="w-full p-2 border rounded text-sm">
                 {distortionTypes.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
-              <label className="block text-sm mb-1">Strength: {settings.distortionStrength}</label>
-              <input type="range" min="5" max="80" value={settings.distortionStrength} onChange={(e) => setSettings(s => ({ ...s, distortionStrength: parseInt(e.target.value) }))} className="w-full" />
-              <label className="block text-sm mb-1">Base Speed: {settings.distortionSpeed}</label>
-              <input type="range" min="0.1" max="3" step="0.1" value={settings.distortionSpeed} onChange={(e) => setSettings(s => ({ ...s, distortionSpeed: parseFloat(e.target.value) }))} className="w-full" />
+              <div>
+                <label className="block text-sm">Strength: {settings.distortionStrength}</label>
+                <input type="range" min="5" max="80" value={settings.distortionStrength} onChange={(e) => setSettings(s => ({ ...s, distortionStrength: parseInt(e.target.value) }))} className="w-full" />
+              </div>
+              <div>
+                <label className="block text-sm">Speed: {settings.distortionSpeed}</label>
+                <input type="range" min="0.1" max="3" step="0.1" value={settings.distortionSpeed} onChange={(e) => setSettings(s => ({ ...s, distortionSpeed: parseFloat(e.target.value) }))} className="w-full" />
+              </div>
             </div>
           )}
         </div>
-
+        
         <div>
           <h3 className="font-semibold mb-2">Pixelation</h3>
           <label className="flex items-center mb-2">
             <input type="checkbox" checked={settings.pixelationEnabled} onChange={(e) => setSettings(s => ({ ...s, pixelationEnabled: e.target.checked }))} className="mr-2" />
-            Enable Bass Reactive
+            Enable
           </label>
-          <div>
-            <label className="block text-sm mb-1">Base Size: {settings.pixelSize}</label>
-            <input type="range" min="2" max="12" value={settings.pixelSize} onChange={(e) => setSettings(s => ({ ...s, pixelSize: parseInt(e.target.value) }))} className="w-full" />
-            <div className="text-xs text-gray-500 mt-1">Bass adds extra pixelation when enabled</div>
-          </div>
+          {settings.pixelationEnabled && (
+            <div>
+              <label className="block text-sm">Pixel Size: {settings.pixelSize}</label>
+              <input type="range" min="2" max="12" value={settings.pixelSize} onChange={(e) => setSettings(s => ({ ...s, pixelSize: parseInt(e.target.value) }))} className="w-full" />
+            </div>
+          )}
         </div>
       </div>
 
       <div className="flex-1 p-4 relative">
         <canvas 
           ref={canvasRef} 
-          className="w-full h-full border border-gray-300 bg-white rounded-lg shadow-lg cursor-crosshair" 
+          className="w-full h-full border bg-white rounded-lg shadow-lg cursor-crosshair" 
           onClick={handleCanvasClick}
           onMouseDown={handleCanvasMouseDown}
           onMouseMove={handleCanvasMouseMove}
@@ -937,9 +883,6 @@ const PixelMoireGenerator = () => {
             </button>
             <button onClick={() => addElement('square')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
               Add Square
-            </button>
-            <button onClick={() => addElement('line')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
-              Add Line
             </button>
             <div className="border-t border-gray-200 my-1"></div>
             <button onClick={removeElement} className="block w-full px-4 py-2 text-left hover:bg-red-100 text-sm text-red-600">
