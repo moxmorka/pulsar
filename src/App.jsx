@@ -1,496 +1,168 @@
 import React from 'react';
 import { RotateCcw, Download, Play, Square } from 'lucide-react';
 
-const GenerativePatternSystem = () => {
+const App = () => {
   const canvasRef = React.useRef(null);
-  const animationRef = React.useRef(null);
-  const audioContextRef = React.useRef(null);
+  const animRef = React.useRef(null);
+  const audioRef = React.useRef(null);
   const analyserRef = React.useRef(null);
-  const midiVelocityRef = React.useRef(0);
+  const midiVelRef = React.useRef(0);
   const midiNoteRef = React.useRef(0);
   const smoothAudioRef = React.useRef(0);
   const smoothBassRef = React.useRef(0);
 
-  const [audioEnabled, setAudioEnabled] = React.useState(false);
-  const [audioLevel, setAudioLevel] = React.useState(0);
-  const [bassLevel, setBassLevel] = React.useState(0);
-  const [gridCells, setGridCells] = React.useState([]);
-  const [midiEnabled, setMidiEnabled] = React.useState(false);
-  const [midiDevices, setMidiDevices] = React.useState([]);
-  const [audioDevices, setAudioDevices] = React.useState([]);
-  const [selectedAudioDevice, setSelectedAudioDevice] = React.useState('');
+  const [audioOn, setAudioOn] = React.useState(false);
+  const [audioLvl, setAudioLvl] = React.useState(0);
+  const [bassLvl, setBassLvl] = React.useState(0);
+  const [cells, setCells] = React.useState([]);
+  const [menu, setMenu] = React.useState(null);
+  const [drawing, setDrawing] = React.useState(false);
+  const [midiOn, setMidiOn] = React.useState(false);
+  const [midiDevs, setMidiDevs] = React.useState([]);
+  const [audioDevs, setAudioDevs] = React.useState([]);
+  const [selAudio, setSelAudio] = React.useState('');
 
-  const [settings, setSettings] = React.useState({
-    patternType: 'swiss-grid',
-    lineThickness: 2,
-    spacing: 40,
-    distortionEnabled: false,
-    distortionType: 'liquify',
-    distortionStrength: 30,
-    distortionSpeed: 1,
-    audioSensitivity: 3,
-    midiSensitivity: 2,
-    dotSize: 4,
-    shapeSize: 8,
-    text: 'SOUND',
-    fontSize: 48,
-    charSequence: '01',
-    charGridSize: 24,
-    charCycleSpeed: 2,
-    gridColumns: 12,
-    gridRows: 16,
-    showGridLines: true,
-    gridRotation: 0,
-    cycleMode: 'crossfade',
-    elementBehavior: 'pulse',
-    stringBehavior: 'wave',
-    motionSmoothing: 0.15,
-    charStagger: 0.08
+  const [s, setS] = React.useState({
+    pat: 'swiss-grid', thick: 2, space: 40, distOn: false, distType: 'liquify', distStr: 30, distSpd: 1,
+    audioSens: 3, midiSens: 2, dotSz: 4, shapeSz: 8, txt: 'SOUND', fontSz: 48, chars: '01', charSz: 24,
+    charSpd: 2, cols: 12, rows: 16, grid: true, rot: 0, cycle: 'crossfade', behave: 'pulse', strBehave: 'wave',
+    stagger: 0.08, draw: false, selEl: 'char', pixOn: false, pixSz: 4
   });
 
-  const PHI = 1.618033988749895;
-  
-  const easeOutQuart = (t) => 1 - Math.pow(1 - t, 4);
-  const easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-  const applyEasing = (t) => easeInOutCubic(Math.max(0, Math.min(1, t)));
+  const ease = (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 
   React.useEffect(() => {
-    const getAudioDevices = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(device => device.kind === 'audioinput');
-        setAudioDevices(audioInputs);
-        if (audioInputs.length > 0 && !selectedAudioDevice) {
-          setSelectedAudioDevice(audioInputs[0].deviceId);
-        }
-      } catch (err) {
-        console.error('Failed to enumerate devices');
-      }
-    };
-    getAudioDevices();
+    navigator.mediaDevices.enumerateDevices().then(d => {
+      const a = d.filter(x => x.kind === 'audioinput');
+      setAudioDevs(a);
+      if (a.length > 0) setSelAudio(a[0].deviceId);
+    });
   }, []);
 
   React.useEffect(() => {
-    if (!midiEnabled) {
-      midiVelocityRef.current = 0;
-      midiNoteRef.current = 0;
-      return;
-    }
-    const initMIDI = async () => {
-      try {
-        const access = await navigator.requestMIDIAccess();
-        const devices = [];
-        for (const input of access.inputs.values()) {
-          devices.push(input.name);
-          input.onmidimessage = (event) => {
-            const [status, note, velocity] = event.data;
-            const command = status >> 4;
-            if (command === 9 && velocity > 0) {
-              midiNoteRef.current = note;
-              midiVelocityRef.current = velocity / 127;
-            } else if (command === 8 || (command === 9 && velocity === 0)) {
-              midiVelocityRef.current = 0;
-            }
-          };
-        }
-        setMidiDevices(devices);
-      } catch (err) {
-        console.error('MIDI failed');
+    if (!midiOn) { midiVelRef.current = 0; return; }
+    navigator.requestMIDIAccess().then(acc => {
+      const devs = [];
+      for (const inp of acc.inputs.values()) {
+        devs.push(inp.name);
+        inp.onmidimessage = (e) => {
+          const [st, n, v] = e.data;
+          if ((st >> 4) === 9 && v > 0) { midiNoteRef.current = n; midiVelRef.current = v / 127; }
+          else midiVelRef.current = 0;
+        };
       }
-    };
-    initMIDI();
-  }, [midiEnabled]);
+      setMidiDevs(devs);
+    });
+  }, [midiOn]);
 
   React.useEffect(() => {
-    if (!audioEnabled) {
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      analyserRef.current = null;
-      setAudioLevel(0);
-      setBassLevel(0);
-      smoothAudioRef.current = 0;
-      smoothBassRef.current = 0;
+    if (!audioOn) {
+      if (audioRef.current) audioRef.current.close();
+      setAudioLvl(0); setBassLvl(0); smoothAudioRef.current = 0; smoothBassRef.current = 0;
       return;
     }
-    const initAudio = async () => {
-      try {
-        const constraints = { 
-          audio: selectedAudioDevice ? { deviceId: { exact: selectedAudioDevice } } : true 
-        };
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        audioContextRef.current = audioContext;
-        const source = audioContext.createMediaStreamSource(stream);
-        const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 2048;
-        analyser.smoothingTimeConstant = 0.8;
-        analyserRef.current = analyser;
-        source.connect(analyser);
-        
-        const updateAudio = () => {
-          if (!analyserRef.current) return;
-          const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-          analyserRef.current.getByteFrequencyData(dataArray);
-          const bass = dataArray.slice(0, 50).reduce((a, b) => a + b, 0) / 50 / 255;
-          const overall = dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
-          
-          // Smooth interpolation
-          smoothAudioRef.current += (overall - smoothAudioRef.current) * settings.motionSmoothing;
-          smoothBassRef.current += (bass - smoothBassRef.current) * settings.motionSmoothing;
-          
-          setAudioLevel(smoothAudioRef.current);
-          setBassLevel(smoothBassRef.current);
-          requestAnimationFrame(updateAudio);
-        };
-        updateAudio();
-      } catch (err) {
-        alert('Audio access denied');
-      }
-    };
-    initAudio();
-  }, [audioEnabled, selectedAudioDevice]);
+    navigator.mediaDevices.getUserMedia({ audio: selAudio ? { deviceId: { exact: selAudio } } : true }).then(st => {
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      audioRef.current = ac;
+      const an = ac.createAnalyser();
+      an.fftSize = 2048;
+      analyserRef.current = an;
+      ac.createMediaStreamSource(st).connect(an);
+      const upd = () => {
+        if (!analyserRef.current) return;
+        const d = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteFrequencyData(d);
+        const b = d.slice(0, 50).reduce((a, x) => a + x, 0) / 50 / 255;
+        const o = d.reduce((a, x) => a + x, 0) / d.length / 255;
+        smoothAudioRef.current += (o - smoothAudioRef.current) * 0.15;
+        smoothBassRef.current += (b - smoothBassRef.current) * 0.15;
+        setAudioLvl(smoothAudioRef.current); setBassLvl(smoothBassRef.current);
+        requestAnimationFrame(upd);
+      };
+      upd();
+    });
+  }, [audioOn, selAudio]);
 
-  const noise = (() => {
-    const p = [];
-    for (let i = 0; i < 512; i++) p[i] = Math.floor(Math.random() * 256);
-    return (x, y) => {
-      const X = Math.floor(x) & 255;
-      const Y = Math.floor(y) & 255;
-      x -= Math.floor(x);
-      y -= Math.floor(y);
-      const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
-      const u = fade(x);
-      const v = fade(y);
-      const A = p[X] + Y;
-      const B = p[X + 1] + Y;
-      const lerp = (t, a, b) => a + t * (b - a);
-      return lerp(v, lerp(u, p[A] / 128 - 1, p[B] / 128 - 1), lerp(u, p[A + 1] / 128 - 1, p[B + 1] / 128 - 1));
-    };
-  })();
+  const noise = (() => { const p = []; for (let i = 0; i < 512; i++) p[i] = Math.floor(Math.random() * 256); return (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const f = t => t * t * t * (t * (t * 6 - 15) + 10); const u = f(x), v = f(y), A = p[X] + Y, B = p[X + 1] + Y; const l = (t, a, b) => a + t * (b - a); return l(v, l(u, p[A] / 128 - 1, p[B] / 128 - 1), l(u, p[A + 1] / 128 - 1, p[B + 1] / 128 - 1)); }; })();
 
-  const getDistortion = (x, y, time, strength, type) => {
-    const freq = 0.008;
-    const t = time || 0;
-    let dx = 0, dy = 0;
-    switch (type) {
-      case 'liquify':
-        dx = noise((x + t * 30) * freq, y * freq) * strength;
-        dy = noise((x + t * 30) * freq + 100, (y + t * 20) * freq + 100) * strength;
-        break;
-      case 'ripple':
-        const dist = Math.sqrt(x * x + y * y);
-        const ripple = Math.sin((dist - t * 40) * 0.015) * strength;
-        dx = (x / (dist || 1)) * ripple;
-        dy = (y / (dist || 1)) * ripple;
-        break;
-      case 'swirl':
-        const angle = Math.atan2(y, x);
-        const radius = Math.sqrt(x * x + y * y);
-        const rotation = t * 0.2;
-        const newAngle = angle + rotation + (strength * 0.0008) * (1 / (1 + radius * 0.01));
-        dx = Math.cos(newAngle) * radius - x;
-        dy = Math.sin(newAngle) * radius - y;
-        break;
-    }
-    return { x: dx, y: dy };
-  };
+  const dist = (x, y, t, str, tp) => { const f = 0.008; let dx = 0, dy = 0; if (tp === 'liquify') { dx = noise((x + t * 30) * f, y * f) * str; dy = noise((x + t * 30) * f + 100, (y + t * 20) * f + 100) * str; } else if (tp === 'ripple') { const d = Math.sqrt(x * x + y * y), r = Math.sin((d - t * 40) * 0.015) * str; dx = (x / (d || 1)) * r; dy = (y / (d || 1)) * r; } else if (tp === 'swirl') { const a = Math.atan2(y, x), rad = Math.sqrt(x * x + y * y), na = a + t * 0.2 + (str * 0.0008) * (1 / (1 + rad * 0.01)); dx = Math.cos(na) * rad - x; dy = Math.sin(na) * rad - y; } return { x: dx, y: dy }; };
 
-  const generateRandomGrid = () => {
-    const cells = [];
-    const totalCells = settings.gridColumns * settings.gridRows;
-    const numElements = Math.floor(totalCells * 0.25);
-    const usedIndices = new Set();
-    for (let i = 0; i < numElements; i++) {
-      let index;
-      do {
-        index = Math.floor(Math.random() * totalCells);
-      } while (usedIndices.has(index));
-      usedIndices.add(index);
-      cells.push({ 
-        index: index, 
-        type: ['char', 'dot', 'square'][Math.floor(Math.random() * 3)],
-        phase: Math.random() * Math.PI * 2
-      });
-    }
-    setGridCells(cells);
-  };
+  const gen = () => { const c = [], tot = s.cols * s.rows, u = new Set(); for (let i = 0; i < Math.floor(tot * 0.25); i++) { let idx; do { idx = Math.floor(Math.random() * tot); } while (u.has(idx)); u.add(idx); c.push({ idx, type: ['char', 'dot', 'square'][Math.floor(Math.random() * 3)], ph: Math.random() * Math.PI * 2 }); } setCells(c); };
 
-  const render = (time = 0) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-    
-    ctx.fillStyle = '#FAFAFA';
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#0A0A0A';
-    
-    const animTime = time * 0.001 * settings.distortionSpeed;
-    const midiInfluence = midiVelocityRef.current * settings.midiSensitivity;
-    const audioReactive = smoothAudioRef.current * settings.audioSensitivity;
-    const bassReactive = smoothBassRef.current * settings.audioSensitivity;
-    
-    if (settings.patternType === 'vertical-lines') {
-      const lineThickness = settings.lineThickness * (1 + bassReactive * 0.5);
-      for (let x = 0; x < width; x += settings.spacing) {
-        ctx.beginPath();
-        for (let y = 0; y < height; y += 2) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength * (1 + audioReactive), settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          if (y === 0) ctx.moveTo(drawX, drawY);
-          else ctx.lineTo(drawX, drawY);
-        }
-        ctx.lineWidth = lineThickness;
-        ctx.strokeStyle = '#0A0A0A';
-        ctx.stroke();
-      }
-    } else if (settings.patternType === 'horizontal-lines') {
-      const lineThickness = settings.lineThickness * (1 + bassReactive * 0.5);
-      for (let y = 0; y < height; y += settings.spacing) {
-        ctx.beginPath();
-        for (let x = 0; x < width; x += 2) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength * (1 + audioReactive), settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          if (x === 0) ctx.moveTo(drawX, drawY);
-          else ctx.lineTo(drawX, drawY);
-        }
-        ctx.lineWidth = lineThickness;
-        ctx.strokeStyle = '#0A0A0A';
-        ctx.stroke();
-      }
-    } else if (settings.patternType === 'dots') {
-      const dotSize = settings.dotSize * (1 + (bassReactive + midiInfluence) * 0.6);
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength * (1 + audioReactive), settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          ctx.beginPath();
-          ctx.arc(drawX, drawY, dotSize, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-    } else if (settings.patternType === 'squares') {
-      const shapeSize = settings.shapeSize * (1 + (bassReactive + midiInfluence) * 0.6);
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          let drawX = x, drawY = y;
-          if (settings.distortionEnabled) {
-            const d = getDistortion(x - width/2, y - height/2, animTime, settings.distortionStrength * (1 + audioReactive), settings.distortionType);
-            drawX += d.x;
-            drawY += d.y;
-          }
-          const halfSize = shapeSize / 2;
-          ctx.fillRect(drawX - halfSize, drawY - halfSize, shapeSize, shapeSize);
-        }
-      }
-    } else if (settings.patternType === 'text') {
-      ctx.font = `${settings.fontSize}px -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fontWeight = '600';
-      
-      for (let y = 0; y < height; y += settings.spacing) {
-        for (let x = 0; x < width; x += settings.spacing) {
-          ctx.save();
-          ctx.translate(x, y);
-          const scale = 1 + applyEasing((bassReactive + midiInfluence) * 0.4);
-          ctx.scale(scale, scale);
-          if (midiNoteRef.current > 0) {
-            const rotation = (midiNoteRef.current / 127) * 0.2;
-            ctx.rotate(rotation);
-          }
-          ctx.fillText(settings.text, 0, 0);
-          ctx.restore();
-        }
-      }
-    } else if (settings.patternType === 'char-grid') {
-      ctx.font = `${settings.charGridSize}px "SF Mono", "Monaco", monospace`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const chars = settings.charSequence.split('');
-      if (chars.length > 0) {
-        const cycleTime = time * 0.001 * settings.charCycleSpeed;
-        let rowIndex = 0;
-        for (let y = 0; y < height; y += settings.spacing) {
-          let colIndex = 0;
-          for (let x = 0; x < width; x += settings.spacing) {
-            const staggerOffset = (rowIndex + colIndex) * settings.charStagger;
-            const localCycleTime = cycleTime + staggerOffset;
-            let charIndex;
-            if (settings.stringBehavior === 'cycle') {
-              charIndex = (Math.floor(localCycleTime * 3) + rowIndex + colIndex) % chars.length;
-            } else if (settings.stringBehavior === 'wave') {
-              const wave = Math.sin((colIndex * 0.5 + rowIndex * 0.3 + localCycleTime) * 0.8);
-              charIndex = Math.floor((wave + 1) * 0.5 * chars.length) % chars.length;
-            } else {
-              const seed = rowIndex * 1000 + colIndex + Math.floor(localCycleTime * 2);
-              charIndex = Math.floor((Math.sin(seed) * 0.5 + 0.5) * chars.length);
-            }
-            const char = chars[charIndex];
-            ctx.save();
-            ctx.translate(x, y);
-            const reactiveScale = 1 + applyEasing((bassReactive + midiInfluence) * 0.3);
-            ctx.scale(reactiveScale, reactiveScale);
-            ctx.fillText(char, 0, 0);
-            ctx.restore();
-            colIndex++;
-          }
-          rowIndex++;
-        }
-      }
-    } else if (settings.patternType === 'swiss-grid') {
-      const cellWidth = width / settings.gridColumns;
-      const cellHeight = height / settings.gridRows;
-      const adaptiveSize = Math.min(cellWidth, cellHeight) * 0.5;
-      
-      if (settings.showGridLines) {
-        ctx.strokeStyle = '#E5E5E5';
-        ctx.lineWidth = 0.5;
-        for (let i = 0; i <= settings.gridColumns; i++) {
-          ctx.beginPath();
-          ctx.moveTo(i * cellWidth, 0);
-          ctx.lineTo(i * cellWidth, height);
-          ctx.stroke();
-        }
-        for (let i = 0; i <= settings.gridRows; i++) {
-          ctx.beginPath();
-          ctx.moveTo(0, i * cellHeight);
-          ctx.lineTo(width, i * cellHeight);
-          ctx.stroke();
-        }
-      }
-      
-      const chars = settings.charSequence.split('');
-      const cycleTime = time * 0.001 * settings.charCycleSpeed;
-      
-      gridCells.forEach((cell, cellIdx) => {
-        const col = cell.index % settings.gridColumns;
-        const row = Math.floor(cell.index / settings.gridColumns);
-        const centerX = col * cellWidth + cellWidth / 2;
-        const centerY = row * cellHeight + cellHeight / 2;
-        const stagger = cellIdx * settings.charStagger;
-        const localTime = cycleTime + stagger;
-        const audioBoost = applyEasing((bassReactive + midiInfluence) * 0.5);
-        
-        ctx.save();
-        ctx.translate(centerX, centerY);
-        
-        const gridRotationRad = (settings.gridRotation * Math.PI) / 180;
-        if (gridRotationRad !== 0) {
-          ctx.rotate(gridRotationRad);
-        }
-        
-        if (settings.elementBehavior === 'pulse') {
-          const pulse = Math.sin(localTime * 3 + cell.phase) * 0.5 + 0.5;
-          const scale = 0.8 + pulse * 0.4 + audioBoost * 0.3;
-          ctx.scale(scale, scale);
-        } else if (settings.elementBehavior === 'orbit') {
-          const orbitRadius = adaptiveSize * 0.3 * (1 + audioBoost * 0.5);
-          const orbitAngle = localTime * 1.5 + cell.phase;
-          const orbitX = Math.cos(orbitAngle) * orbitRadius;
-          const orbitY = Math.sin(orbitAngle) * orbitRadius;
-          ctx.translate(orbitX, orbitY);
-        } else if (settings.elementBehavior === 'bounce') {
-          const bounce = Math.abs(Math.sin(localTime * 2 + cell.phase));
-          const bounceY = -bounce * adaptiveSize * 0.5 * (1 + audioBoost);
-          ctx.translate(0, bounceY);
-        }
-        
-        if (cell.type === 'char' && chars.length > 0) {
-          ctx.font = `${adaptiveSize * 1.2}px "SF Mono", "Monaco", monospace`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          
-          if (settings.cycleMode === 'crossfade') {
-            const charIndexFloat = (localTime * 2) % chars.length;
-            const currentIndex = Math.floor(charIndexFloat);
-            const nextIndex = (currentIndex + 1) % chars.length;
-            const progress = charIndexFloat - currentIndex;
-            const easedProgress = applyEasing(progress);
-            
-            ctx.globalAlpha = 1 - easedProgress;
-            ctx.fillText(chars[currentIndex], 0, 0);
-            ctx.globalAlpha = easedProgress;
-            ctx.fillText(chars[nextIndex], 0, 0);
-            ctx.globalAlpha = 1;
-          } else {
-            const charIndex = Math.floor(localTime * 2) % chars.length;
-            ctx.fillText(chars[charIndex], 0, 0);
-          }
-        } else if (cell.type === 'dot') {
-          const radius = adaptiveSize * 0.4 * (1 + audioBoost * 0.4);
-          ctx.beginPath();
-          ctx.arc(0, 0, radius, 0, Math.PI * 2);
-          ctx.fill();
-        } else if (cell.type === 'square') {
-          const size = adaptiveSize * 0.8 * (1 + audioBoost * 0.4);
-          ctx.fillRect(-size/2, -size/2, size, size);
-        }
+  const getC = (cx, cy) => { const cv = canvasRef.current; if (!cv) return null; const cw = cv.width / s.cols, ch = cv.height / s.rows; const col = Math.floor(cx / cw), row = Math.floor(cy / ch); return (col >= 0 && col < s.cols && row >= 0 && row < s.rows) ? row * s.cols + col : null; };
+
+  const clk = (e) => { if (s.pat !== 'swiss-grid') return; const cv = canvasRef.current, r = cv.getBoundingClientRect(); const x = (e.clientX - r.left) * (cv.width / r.width), y = (e.clientY - r.top) * (cv.height / r.height); const idx = getC(x, y); if (idx === null) return; if (s.draw) setCells(p => { const ex = p.findIndex(c => c.idx === idx); return ex === -1 ? [...p, { idx, type: s.selEl, ph: Math.random() * Math.PI * 2 }] : p; }); else { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, idx }); } };
+
+  const down = (e) => { if (s.pat === 'swiss-grid' && s.draw) { setDrawing(true); clk(e); }};
+  const move = (e) => { if (!drawing || s.pat !== 'swiss-grid' || !s.draw) return; const cv = canvasRef.current, r = cv.getBoundingClientRect(); const x = (e.clientX - r.left) * (cv.width / r.width), y = (e.clientY - r.top) * (cv.height / r.height); const idx = getC(x, y); if (idx !== null) setCells(p => { const ex = p.findIndex(c => c.idx === idx); return ex === -1 ? [...p, { idx, type: s.selEl, ph: Math.random() * Math.PI * 2 }] : p; }); };
+  const up = () => setDrawing(false);
+
+  const add = (tp) => { if (menu) { const ex = cells.findIndex(c => c.idx === menu.idx); if (ex >= 0) { const n = [...cells]; n[ex] = { idx: menu.idx, type: tp, ph: Math.random() * Math.PI * 2 }; setCells(n); } else setCells([...cells, { idx: menu.idx, type: tp, ph: Math.random() * Math.PI * 2 }]); setMenu(null); }};
+  const rem = () => { if (menu) { setCells(cells.filter(c => c.idx !== menu.idx)); setMenu(null); }};
+
+  React.useEffect(() => { const cl = () => setMenu(null); window.addEventListener('click', cl); return () => window.removeEventListener('click', cl); }, []);
+
+  const render = (tm = 0) => {
+    const cv = canvasRef.current; if (!cv) return;
+    const ctx = cv.getContext('2d'), w = cv.width, h = cv.height;
+    ctx.fillStyle = '#FAFAFA'; ctx.fillRect(0, 0, w, h); ctx.fillStyle = '#0A0A0A';
+    const at = tm * 0.001 * s.distSpd, midi = midiVelRef.current * s.midiSens;
+    const aud = smoothAudioRef.current * s.audioSens, bass = smoothBassRef.current * s.audioSens;
+
+    if (s.pat === 'vertical-lines') {
+      const th = s.thick * (1 + bass * 0.5);
+      for (let x = 0; x < w; x += s.space) { ctx.beginPath(); for (let y = 0; y < h; y += 2) { let dx = x, dy = y; if (s.distOn) { const d = dist(x - w/2, y - h/2, at, s.distStr * (1 + aud), s.distType); dx += d.x; dy += d.y; } if (y === 0) ctx.moveTo(dx, dy); else ctx.lineTo(dx, dy); } ctx.lineWidth = th; ctx.stroke(); }
+    } else if (s.pat === 'horizontal-lines') {
+      const th = s.thick * (1 + bass * 0.5);
+      for (let y = 0; y < h; y += s.space) { ctx.beginPath(); for (let x = 0; x < w; x += 2) { let dx = x, dy = y; if (s.distOn) { const d = dist(x - w/2, y - h/2, at, s.distStr * (1 + aud), s.distType); dx += d.x; dy += d.y; } if (x === 0) ctx.moveTo(dx, dy); else ctx.lineTo(dx, dy); } ctx.lineWidth = th; ctx.stroke(); }
+    } else if (s.pat === 'dots') {
+      const ds = s.dotSz * (1 + (bass + midi) * 0.6);
+      for (let y = 0; y < h; y += s.space) for (let x = 0; x < w; x += s.space) { let dx = x, dy = y; if (s.distOn) { const d = dist(x - w/2, y - h/2, at, s.distStr * (1 + aud), s.distType); dx += d.x; dy += d.y; } ctx.beginPath(); ctx.arc(dx, dy, ds, 0, Math.PI * 2); ctx.fill(); }
+    } else if (s.pat === 'squares') {
+      const ss = s.shapeSz * (1 + (bass + midi) * 0.6);
+      for (let y = 0; y < h; y += s.space) for (let x = 0; x < w; x += s.space) { let dx = x, dy = y; if (s.distOn) { const d = dist(x - w/2, y - h/2, at, s.distStr * (1 + aud), s.distType); dx += d.x; dy += d.y; } ctx.fillRect(dx - ss/2, dy - ss/2, ss, ss); }
+    } else if (s.pat === 'text') {
+      ctx.font = `600 ${s.fontSz}px -apple-system, "SF Pro Display", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      for (let y = 0; y < h; y += s.space) for (let x = 0; x < w; x += s.space) { ctx.save(); ctx.translate(x, y); const sc = 1 + ease((bass + midi) * 0.4); ctx.scale(sc, sc); if (midiNoteRef.current > 0) ctx.rotate((midiNoteRef.current / 127) * 0.2); ctx.fillText(s.txt, 0, 0); ctx.restore(); }
+    } else if (s.pat === 'char-grid') {
+      ctx.font = `${s.charSz}px "SF Mono", Monaco, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const chs = s.chars.split(''); if (chs.length > 0) { const ct = tm * 0.001 * s.charSpd; let ri = 0; for (let y = 0; y < h; y += s.space) { let ci = 0; for (let x = 0; x < w; x += s.space) { const st = ct + (ri + ci) * s.stagger; let idx; if (s.strBehave === 'cycle') idx = (Math.floor(st * 3) + ri + ci) % chs.length; else if (s.strBehave === 'wave') { const wv = Math.sin((ci * 0.5 + ri * 0.3 + st) * 0.8); idx = Math.floor((wv + 1) * 0.5 * chs.length) % chs.length; } else { const sd = ri * 1000 + ci + Math.floor(st * 2); idx = Math.floor((Math.sin(sd) * 0.5 + 0.5) * chs.length); } ctx.save(); ctx.translate(x, y); ctx.scale(1 + ease((bass + midi) * 0.3), 1 + ease((bass + midi) * 0.3)); ctx.fillText(chs[idx], 0, 0); ctx.restore(); ci++; } ri++; }}
+    } else if (s.pat === 'swiss-grid') {
+      const cw = w / s.cols, ch = h / s.rows, sz = Math.min(cw, ch) * 0.5;
+      if (s.grid) { ctx.strokeStyle = '#E5E5E5'; ctx.lineWidth = 0.5; for (let i = 0; i <= s.cols; i++) { ctx.beginPath(); ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, h); ctx.stroke(); } for (let i = 0; i <= s.rows; i++) { ctx.beginPath(); ctx.moveTo(0, i * ch); ctx.lineTo(w, i * ch); ctx.stroke(); }}
+      const chs = s.chars.split(''), ct = tm * 0.001 * s.charSpd;
+      cells.forEach((cel, idx) => {
+        const col = cel.idx % s.cols, row = Math.floor(cel.idx / s.cols);
+        const cx = col * cw + cw / 2, cy = row * ch + ch / 2;
+        const lt = ct + idx * s.stagger, ab = ease((bass + midi) * 0.5);
+        ctx.save(); ctx.translate(cx, cy);
+        const gr = (s.rot + aud * 45) * Math.PI / 180; if (gr !== 0) ctx.rotate(gr);
+        if (s.behave === 'pulse') { const p = Math.sin(lt * 3 + cel.ph) * 0.5 + 0.5; ctx.scale(0.8 + p * 0.4 + ab * 0.3, 0.8 + p * 0.4 + ab * 0.3); }
+        else if (s.behave === 'orbit') { const r = sz * 0.3 * (1 + ab * 0.5), a = lt * 1.5 + cel.ph; ctx.translate(Math.cos(a) * r, Math.sin(a) * r); }
+        else if (s.behave === 'bounce') { const bn = Math.abs(Math.sin(lt * 2 + cel.ph)); ctx.translate(0, -bn * sz * 0.5 * (1 + ab)); }
+        if (cel.type === 'char' && chs.length > 0) { ctx.font = `${sz * 1.2}px "SF Mono", Monaco, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; if (s.cycle === 'crossfade') { const cf = (lt * 2) % chs.length, ci = Math.floor(cf), ni = (ci + 1) % chs.length, pr = cf - ci, ep = ease(pr); ctx.globalAlpha = 1 - ep; ctx.fillText(chs[ci], 0, 0); ctx.globalAlpha = ep; ctx.fillText(chs[ni], 0, 0); ctx.globalAlpha = 1; } else ctx.fillText(chs[Math.floor(lt * 2) % chs.length], 0, 0); }
+        else if (cel.type === 'dot') { ctx.beginPath(); ctx.arc(0, 0, sz * 0.4 * (1 + ab * 0.4), 0, Math.PI * 2); ctx.fill(); }
+        else if (cel.type === 'square') { const ss = sz * 0.8 * (1 + ab * 0.4); ctx.fillRect(-ss/2, -ss/2, ss, ss); }
         ctx.restore();
       });
+      if (s.pixOn) { const img = ctx.getImageData(0, 0, w, h), pix = ctx.createImageData(w, h), ps = s.pixSz; for (let y = 0; y < h; y += ps) for (let x = 0; x < w; x += ps) { const i = (y * w + x) * 4, r = img.data[i], g = img.data[i + 1], b = img.data[i + 2]; for (let py = 0; py < ps && y + py < h; py++) for (let px = 0; px < ps && x + px < w; px++) { const pi = ((y + py) * w + (x + px)) * 4; pix.data[pi] = r; pix.data[pi + 1] = g; pix.data[pi + 2] = b; pix.data[pi + 3] = 255; }} ctx.putImageData(pix, 0, 0); }
     }
   };
 
-  React.useEffect(() => {
-    const loop = (time) => {
-      render(time);
-      animationRef.current = requestAnimationFrame(loop);
-    };
-    animationRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animationRef.current);
-  }, [settings, gridCells, audioLevel, bassLevel]);
-
-  React.useEffect(() => {
-    const handleResize = () => {
-      if (canvasRef.current) {
-        canvasRef.current.width = canvasRef.current.offsetWidth;
-        canvasRef.current.height = canvasRef.current.offsetHeight;
-      }
-    };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  React.useEffect(() => {
-    generateRandomGrid();
-  }, []);
+  React.useEffect(() => { const loop = (t) => { render(t); animRef.current = requestAnimationFrame(loop); }; animRef.current = requestAnimationFrame(loop); return () => cancelAnimationFrame(animRef.current); }, [s, cells]);
+  React.useEffect(() => { const rsz = () => { if (canvasRef.current) { canvasRef.current.width = canvasRef.current.offsetWidth; canvasRef.current.height = canvasRef.current.offsetHeight; }}; rsz(); window.addEventListener('resize', rsz); return () => window.removeEventListener('resize', rsz); }, []);
+  React.useEffect(() => { gen(); }, []);
 
   return (
     <div className="w-full h-screen bg-white flex">
-      <div className="w-72 bg-neutral-50 border-r border-neutral-200 p-6 overflow-y-auto space-y-6">
+      <div className="w-72 bg-neutral-50 border-r border-neutral-200 p-5 overflow-y-auto space-y-4 text-sm">
         <div className="flex gap-2">
-          <button onClick={generateRandomGrid} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-black text-white rounded-lg text-sm font-medium hover:bg-neutral-800 transition-colors">
-            <RotateCcw size={16} />
-          </button>
-          <button onClick={() => {
-            const link = document.createElement('a');
-            link.download = 'pattern.png';
-            link.href = canvasRef.current.toDataURL();
-            link.click();
-          }} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-black text-white rounded-lg text-sm font-medium hover:bg-neutral-800 transition-colors">
-            <Download size={16} />
-          </button>
+          <button onClick={gen} className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800"><RotateCcw size={16} /></button>
+          <button onClick={() => { const l = document.createElement('a'); l.download = 'pattern.png'; l.href = canvasRef.current.toDataURL(); l.click(); }} className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800"><Download size={16} /></button>
         </div>
-
-        <div className="space-y-3">
-          <label className="block text-xs font-semibold text-neutral-900 uppercase tracking-wider">Pattern</label>
-          <select value={settings.patternType} onChange={(e) => setSettings(s => ({ ...s, patternType: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-black">
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider">Pattern</label>
+          <select value={s.pat} onChange={(e) => setS(p => ({ ...p, pat: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black">
             <option value="vertical-lines">Vertical Lines</option>
             <option value="horizontal-lines">Horizontal Lines</option>
             <option value="dots">Dots</option>
@@ -500,105 +172,61 @@ const GenerativePatternSystem = () => {
             <option value="swiss-grid">Swiss Grid</option>
           </select>
         </div>
-
-        <div className="space-y-3">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold text-neutral-900 uppercase tracking-wider">Audio</label>
-            <button onClick={() => setAudioEnabled(!audioEnabled)} className={`p-1.5 rounded transition-colors ${audioEnabled ? 'bg-black text-white' : 'bg-neutral-200'}`}>
-              {audioEnabled ? <Play size={14} fill="white" /> : <Square size={14} />}
-            </button>
+            <label className="text-xs font-semibold uppercase tracking-wider">Audio</label>
+            <button onClick={() => setAudioOn(!audioOn)} className={`p-1.5 rounded ${audioOn ? 'bg-black text-white' : 'bg-neutral-200'}`}>{audioOn ? <Play size={14} fill="white" /> : <Square size={14} />}</button>
           </div>
-          {audioDevices.length > 0 && (
-            <select value={selectedAudioDevice} onChange={(e) => setSelectedAudioDevice(e.target.value)} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-black">
-              {audioDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Device ${d.deviceId.slice(0,8)}`}</option>)}
-            </select>
-          )}
-          {audioEnabled && (
-            <div className="space-y-2">
-              <div className="h-1 bg-neutral-200 rounded-full overflow-hidden">
-                <div className="h-full bg-black transition-all duration-75" style={{ width: `${audioLevel * 100}%` }} />
-              </div>
-              <div className="h-1 bg-neutral-200 rounded-full overflow-hidden">
-                <div className="h-full bg-neutral-600 transition-all duration-75" style={{ width: `${bassLevel * 100}%` }} />
-              </div>
-            </div>
-          )}
+          {audioDevs.length > 0 && <select value={selAudio} onChange={(e) => setSelAudio(e.target.value)} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs">{audioDevs.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Device ${d.deviceId.slice(0,8)}`}</option>)}</select>}
+          {audioOn && <div className="space-y-1.5"><div className="h-1 bg-neutral-200 rounded-full"><div className="h-full bg-black transition-all" style={{ width: `${audioLvl * 100}%` }} /></div><div className="h-1 bg-neutral-200 rounded-full"><div className="h-full bg-neutral-600 transition-all" style={{ width: `${bassLvl * 100}%` }} /></div></div>}
         </div>
-
-        <div className="space-y-3">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold text-neutral-900 uppercase tracking-wider">MIDI</label>
-            <button onClick={() => setMidiEnabled(!midiEnabled)} className={`p-1.5 rounded transition-colors ${midiEnabled ? 'bg-black text-white' : 'bg-neutral-200'}`}>
-              {midiEnabled ? <Play size={14} fill="white" /> : <Square size={14} />}
-            </button>
+            <label className="text-xs font-semibold uppercase tracking-wider">MIDI</label>
+            <button onClick={() => setMidiOn(!midiOn)} className={`p-1.5 rounded ${midiOn ? 'bg-black text-white' : 'bg-neutral-200'}`}>{midiOn ? <Play size={14} fill="white" /> : <Square size={14} />}</button>
           </div>
-          {midiEnabled && midiDevices.length > 0 && (
-            <div className="text-xs text-neutral-600">{midiDevices.length} device(s)</div>
-          )}
+          {midiOn && midiDevs.length > 0 && <div className="text-xs text-neutral-600">{midiDevs.length} device(s)</div>}
         </div>
-
-        <div className="space-y-3">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold text-neutral-900 uppercase tracking-wider">Distortion</label>
-            <button onClick={() => setSettings(s => ({ ...s, distortionEnabled: !s.distortionEnabled }))} className={`p-1.5 rounded transition-colors ${settings.distortionEnabled ? 'bg-black text-white' : 'bg-neutral-200'}`}>
-              {settings.distortionEnabled ? <Play size={14} fill="white" /> : <Square size={14} />}
-            </button>
+            <label className="text-xs font-semibold uppercase tracking-wider">Distortion</label>
+            <button onClick={() => setS(p => ({ ...p, distOn: !p.distOn }))} className={`p-1.5 rounded ${s.distOn ? 'bg-black text-white' : 'bg-neutral-200'}`}>{s.distOn ? <Play size={14} fill="white" /> : <Square size={14} />}</button>
           </div>
-          {settings.distortionEnabled && (
-            <select value={settings.distortionType} onChange={(e) => setSettings(s => ({ ...s, distortionType: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-black">
-              <option value="liquify">Liquify</option>
-              <option value="ripple">Ripple</option>
-              <option value="swirl">Swirl</option>
-            </select>
-          )}
+          {s.distOn && <select value={s.distType} onChange={(e) => setS(p => ({ ...p, distType: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs"><option value="liquify">Liquify</option><option value="ripple">Ripple</option><option value="swirl">Swirl</option></select>}
         </div>
-
-        {settings.patternType === 'swiss-grid' && (
-          <>
-            <div className="space-y-3">
-              <label className="block text-xs font-semibold text-neutral-900 uppercase tracking-wider">Grid</label>
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <div className="text-xs text-neutral-600 mb-1">{settings.gridColumns} × {settings.gridRows}</div>
-                  <input type="range" min="4" max="40" value={settings.gridColumns} onChange={(e) => setSettings(s => ({ ...s, gridColumns: parseInt(e.target.value) }))} className="w-full" />
-                </div>
-              </div>
-              <button onClick={() => setGridCells([])} className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg text-sm font-medium hover:bg-black transition-colors">Clear</button>
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-xs font-semibold text-neutral-900 uppercase tracking-wider">Behavior</label>
-              <select value={settings.elementBehavior} onChange={(e) => setSettings(s => ({ ...s, elementBehavior: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-black">
-                <option value="pulse">Pulse</option>
-                <option value="orbit">Orbit</option>
-                <option value="bounce">Bounce</option>
-              </select>
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-xs font-semibold text-neutral-900 uppercase tracking-wider">Characters</label>
-              <input type="text" value={settings.charSequence} onChange={(e) => setSettings(s => ({ ...s, charSequence: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-black" />
-            </div>
-          </>
-        )}
-
-        {settings.patternType === 'char-grid' && (
-          <div className="space-y-3">
-            <label className="block text-xs font-semibold text-neutral-900 uppercase tracking-wider">String Behavior</label>
-            <select value={settings.stringBehavior} onChange={(e) => setSettings(s => ({ ...s, stringBehavior: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-black">
-              <option value="cycle">Cycle</option>
-              <option value="wave">Wave</option>
-              <option value="random">Random</option>
-            </select>
+        {s.pat === 'swiss-grid' && <>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Grid {s.cols} × {s.rows}</label>
+            <input type="range" min="4" max="40" value={s.cols} onChange={(e) => setS(p => ({ ...p, cols: parseInt(e.target.value) }))} className="w-full" />
+            <div className="flex items-center justify-between"><label className="text-xs font-semibold uppercase tracking-wider">Draw</label><button onClick={() => setS(p => ({ ...p, draw: !p.draw }))} className={`p-1.5 rounded ${s.draw ? 'bg-black text-white' : 'bg-neutral-200'}`}>{s.draw ? <Play size={14} fill="white" /> : <Square size={14} />}</button></div>
+            <button onClick={() => setCells([])} className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black">Clear</button>
           </div>
-        )}
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Behavior</label>
+            <select value={s.behave} onChange={(e) => setS(p => ({ ...p, behave: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"><option value="pulse">Pulse</option><option value="orbit">Orbit</option><option value="bounce">Bounce</option></select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Characters</label>
+            <input type="text" value={s.chars} onChange={(e) => setS(p => ({ ...p, chars: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono" />
+          </div>
+        </>}
+        {s.pat === 'char-grid' && <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider">String Behavior</label>
+          <select value={s.strBehave} onChange={(e) => setS(p => ({ ...p, strBehave: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"><option value="cycle">Cycle</option><option value="wave">Wave</option><option value="random">Random</option></select>
+        </div>}
       </div>
-
-      <div className="flex-1 p-8 bg-white">
-        <canvas ref={canvasRef} className="w-full h-full rounded-lg shadow-sm" />
+      <div className="flex-1 p-8 bg-white relative">
+        <canvas ref={canvasRef} className="w-full h-full rounded-lg shadow-sm" onClick={clk} onMouseDown={down} onMouseMove={move} onMouseUp={up} onMouseLeave={up} />
+        {menu && <div className="fixed bg-white shadow-2xl rounded-lg border py-1 z-50" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => add('char')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">Add Char</button>
+          <button onClick={() => add('dot')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">Add Dot</button>
+          <button onClick={() => add('square')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">Add Square</button>
+          <div className="border-t my-1"></div>
+          <button onClick={rem} className="block w-full px-4 py-2 text-left hover:bg-red-50 text-sm text-red-600">Remove</button>
+        </div>}
       </div>
     </div>
   );
 };
 
-export default GenerativePatternSystem;
+export default App;
