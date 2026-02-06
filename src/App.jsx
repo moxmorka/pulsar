@@ -229,10 +229,10 @@ const App = () => {
       const ss = s.shapeSz * (1 + (bass + midi) * 0.6);
       for (let y = 0; y < h; y += s.space) for (let x = 0; x < w; x += s.space) { let dx = x, dy = y; if (s.distOn) { const d = dist(x - w/2, y - h/2, at, s.distStr * (1 + aud), s.distType); dx += d.x; dy += d.y; } ctx.fillRect(dx - ss/2, dy - ss/2, ss, ss); }
     } else if (s.pat === 'text') {
-      ctx.font = `600 ${s.fontSz}px -apple-system, "SF Pro Display", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `600 ${s.fontSz}px ${getFontFamily()}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       for (let y = 0; y < h; y += s.space) for (let x = 0; x < w; x += s.space) { ctx.save(); ctx.translate(x, y); const sc = 1 + ease((bass + midi) * 0.4); ctx.scale(sc, sc); if (midiNoteRef.current > 0) ctx.rotate((midiNoteRef.current / 127) * 0.2); ctx.fillText(s.txt, 0, 0); ctx.restore(); }
     } else if (s.pat === 'char-grid') {
-      ctx.font = `${s.charSz}px "SF Mono", Monaco, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `${s.charSz}px ${getFontFamily()}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       const chs = s.chars.split(''); if (chs.length > 0) { const ct = tm * 0.001 * s.charSpd; let ri = 0; for (let y = 0; y < h; y += s.space) { let ci = 0; for (let x = 0; x < w; x += s.space) { const st = ct + (ri + ci) * s.stagger; let idx; if (s.strBehave === 'cycle') idx = (Math.floor(st * 3) + ri + ci) % chs.length; else if (s.strBehave === 'wave') { const wv = Math.sin((ci * 0.5 + ri * 0.3 + st) * 0.8); idx = Math.floor((wv + 1) * 0.5 * chs.length) % chs.length; } else { const sd = ri * 1000 + ci + Math.floor(st * 2); idx = Math.floor((Math.sin(sd) * 0.5 + 0.5) * chs.length); } ctx.save(); ctx.translate(x, y); ctx.scale(1 + ease((bass + midi) * 0.3), 1 + ease((bass + midi) * 0.3)); ctx.fillText(chs[idx], 0, 0); ctx.restore(); ci++; } ri++; }}
     } else if (s.pat === 'swiss-grid') {
       const cw = w / s.cols, ch = h / s.rows, sz = Math.min(cw, ch) * 0.5;
@@ -324,7 +324,7 @@ const App = () => {
         }
         
         if (cel.type === 'char' && chs.length > 0) { 
-          ctx.font = `${sz * 1.2}px "SF Mono", Monaco, monospace`; 
+          ctx.font = `${sz * 1.2}px ${getFontFamily()}`; 
           ctx.textAlign = 'center'; 
           ctx.textBaseline = 'middle'; 
           if (s.cycle === 'crossfade') { 
@@ -373,15 +373,71 @@ const App = () => {
             ctx.fillRect(-ss/2, -ss/2, ss, ss); 
           }
         }
+        else if (cel.type === 'svg' && svgPath) {
+          const scale = sz / Math.max(svgPath.width, svgPath.height);
+          ctx.save();
+          ctx.scale(scale, scale);
+          ctx.translate(-svgPath.width / 2, -svgPath.height / 2);
+          const path = new Path2D(svgPath.path);
+          ctx.fill(path);
+          ctx.restore();
+        }
         ctx.restore();
       });
       if (s.pixOn) { const img = ctx.getImageData(0, 0, w, h), pix = ctx.createImageData(w, h), ps = s.pixSz; for (let y = 0; y < h; y += ps) for (let x = 0; x < w; x += ps) { const i = (y * w + x) * 4, r = img.data[i], g = img.data[i + 1], b = img.data[i + 2]; for (let py = 0; py < ps && y + py < h; py++) for (let px = 0; px < ps && x + px < w; px++) { const pi = ((y + py) * w + (x + px)) * 4; pix.data[pi] = r; pix.data[pi + 1] = g; pix.data[pi + 2] = b; pix.data[pi + 3] = 255; }} ctx.putImageData(pix, 0, 0); }
     }
   };
 
-  React.useEffect(() => { const loop = (t) => { render(t); animRef.current = requestAnimationFrame(loop); }; animRef.current = requestAnimationFrame(loop); return () => cancelAnimationFrame(animRef.current); }, [s, cells]);
+  React.useEffect(() => { const loop = (t) => { render(t); animRef.current = requestAnimationFrame(loop); }; animRef.current = requestAnimationFrame(loop); return () => cancelAnimationFrame(animRef.current); }, [s, cells, svgPath]);
   React.useEffect(() => { const rsz = () => { if (canvasRef.current) { canvasRef.current.width = canvasRef.current.offsetWidth; canvasRef.current.height = canvasRef.current.offsetHeight; }}; rsz(); window.addEventListener('resize', rsz); return () => window.removeEventListener('resize', rsz); }, []);
   React.useEffect(() => { gen(); }, []);
+  React.useEffect(() => {
+    if (!s.googleFont) return;
+    const link = document.createElement('link');
+    link.href = `https://fonts.googleapis.com/css2?family=${s.googleFont.replace(/ /g, '+')}:wght@400;600;700&display=swap`;
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+    return () => document.head.removeChild(link);
+  }, [s.googleFont]);
+
+  const handleFontUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const fontFace = new FontFace('CustomFont', `url(${ev.target.result})`);
+      fontFace.load().then((loaded) => {
+        document.fonts.add(loaded);
+        setS(p => ({ ...p, customFont: 'CustomFont' }));
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSvgUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(ev.target.result, 'image/svg+xml');
+      const svgEl = svgDoc.querySelector('svg');
+      const pathEl = svgEl.querySelector('path');
+      if (pathEl) {
+        const pathData = pathEl.getAttribute('d');
+        const viewBox = svgEl.getAttribute('viewBox') || '0 0 100 100';
+        const [, , w, h] = viewBox.split(' ').map(Number);
+        setSvgPath({ path: pathData, width: w, height: h });
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const getFontFamily = () => {
+    if (s.customFont) return s.customFont;
+    if (s.googleFont) return `"${s.googleFont}", sans-serif`;
+    return '-apple-system, "SF Pro Display", sans-serif';
+  };
 
   return (
     <div className="w-full h-screen bg-white flex">
@@ -491,11 +547,102 @@ const App = () => {
             <label className="block text-xs font-semibold uppercase tracking-wider">Characters</label>
             <input type="text" value={s.chars} onChange={(e) => setS(p => ({ ...p, chars: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono" />
           </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Google Font</label>
+            <select value={s.googleFont} onChange={(e) => setS(p => ({ ...p, googleFont: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs">
+              <option value="Inter">Inter</option>
+              <option value="Roboto Mono">Roboto Mono</option>
+              <option value="Space Mono">Space Mono</option>
+              <option value="JetBrains Mono">JetBrains Mono</option>
+              <option value="Fira Code">Fira Code</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Custom Font (.ttf/.otf)</label>
+            <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} className="w-full text-xs" />
+            {s.customFont && <div className="text-xs text-green-600">✓ Custom font loaded</div>}
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Upload SVG Shape</label>
+            <input type="file" accept=".svg" onChange={handleSvgUpload} className="w-full text-xs" />
+            {svgPath && <div className="text-xs text-green-600">✓ SVG loaded</div>}
+          </div>
         </>}
         {s.pat === 'char-grid' && <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wider">String Behavior</label>
           <select value={s.strBehave} onChange={(e) => setS(p => ({ ...p, strBehave: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"><option value="cycle">Cycle</option><option value="wave">Wave</option><option value="random">Random</option></select>
+          <label className="block text-xs font-semibold uppercase tracking-wider">Characters</label>
+          <input type="text" value={s.chars} onChange={(e) => setS(p => ({ ...p, chars: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono" />
+          <label className="block text-xs font-semibold uppercase tracking-wider">Char Size: {s.charSz}px</label>
+          <input type="range" min="8" max="80" value={s.charSz} onChange={(e) => setS(p => ({ ...p, charSz: parseInt(e.target.value) }))} className="w-full" />
+          <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
+          <input type="range" min="10" max="200" value={s.space} onChange={(e) => setS(p => ({ ...p, space: parseInt(e.target.value) }))} className="w-full" />
+          <label className="block text-xs font-semibold uppercase tracking-wider">Speed: {s.charSpd}x</label>
+          <input type="range" min="0" max="10" step="0.1" value={s.charSpd} onChange={(e) => setS(p => ({ ...p, charSpd: parseFloat(e.target.value) }))} className="w-full" />
         </div>}
+        {(s.pat === 'vertical-lines' || s.pat === 'horizontal-lines') && <>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Thickness: {s.thick}px</label>
+            <input type="range" min="0.5" max="20" step="0.5" value={s.thick} onChange={(e) => setS(p => ({ ...p, thick: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
+            <input type="range" min="5" max="200" value={s.space} onChange={(e) => setS(p => ({ ...p, space: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+        </>}
+        {s.pat === 'dots' && <>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Dot Size: {s.dotSz}px</label>
+            <input type="range" min="1" max="30" value={s.dotSz} onChange={(e) => setS(p => ({ ...p, dotSz: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
+            <input type="range" min="10" max="200" value={s.space} onChange={(e) => setS(p => ({ ...p, space: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+        </>}
+        {s.pat === 'squares' && <>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Square Size: {s.shapeSz}px</label>
+            <input type="range" min="2" max="50" value={s.shapeSz} onChange={(e) => setS(p => ({ ...p, shapeSz: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
+            <input type="range" min="10" max="200" value={s.space} onChange={(e) => setS(p => ({ ...p, space: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+        </>}
+        {s.pat === 'text' && <>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Text</label>
+            <input type="text" value={s.txt} onChange={(e) => setS(p => ({ ...p, txt: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg" />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Google Font</label>
+            <select value={s.googleFont} onChange={(e) => setS(p => ({ ...p, googleFont: e.target.value }))} className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs">
+              <option value="Inter">Inter</option>
+              <option value="Roboto">Roboto</option>
+              <option value="Montserrat">Montserrat</option>
+              <option value="Bebas Neue">Bebas Neue</option>
+              <option value="Playfair Display">Playfair Display</option>
+              <option value="Space Grotesk">Space Grotesk</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Font Size: {s.fontSz}px</label>
+            <input type="range" min="12" max="200" value={s.fontSz} onChange={(e) => setS(p => ({ ...p, fontSz: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
+            <input type="range" min="20" max="400" value={s.space} onChange={(e) => setS(p => ({ ...p, space: parseInt(e.target.value) }))} className="w-full" />
+          </div>
+        </>}
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider">Audio Sensitivity: {s.audioSens}</label>
+          <input type="range" min="0" max="10" step="0.1" value={s.audioSens} onChange={(e) => setS(p => ({ ...p, audioSens: parseFloat(e.target.value) }))} className="w-full" />
+        </div>
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider">MIDI Sensitivity: {s.midiSens}</label>
+          <input type="range" min="0" max="10" step="0.1" value={s.midiSens} onChange={(e) => setS(p => ({ ...p, midiSens: parseFloat(e.target.value) }))} className="w-full" />
+        </div>
       </div>
       <div className="flex-1 p-8 bg-white relative">
         <canvas ref={canvasRef} className="w-full h-full rounded-lg shadow-sm" onClick={clk} onMouseDown={down} onMouseMove={move} onMouseUp={up} onMouseLeave={up} />
