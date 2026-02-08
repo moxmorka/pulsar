@@ -121,12 +121,15 @@ const App = () => {
     rot: 0,
     cycle: "crossfade",
     behave: "pulse",
-    strBehave: "wave",
+    strBehave: "wave", // used by char-grid AND swiss-grid base string
     stagger: 0.08,
     draw: false,
-    selEl: "char", // char | dot | square | svg | fill
+    selEl: "char", // char | dot | square | svg
     pixOn: false,
     pixSz: 4,
+
+    // Swiss grid base layer behaves like char-grid (always-on string sequences)
+    swissBaseOn: true,
 
     // BPM sync
     speedMode: "manual", // manual | bpm
@@ -412,8 +415,13 @@ const App = () => {
     setCells((prev) => {
       const ex = prev.findIndex((c) => c.idx === idx);
       const next = [...prev];
-      if (ex >= 0) next[ex] = { ...next[ex], ...patch };
-      else next.push({ idx, type: s.selEl, ph: Math.random() * Math.PI * 2, ...patch });
+      if (ex >= 0) {
+        const existing = next[ex];
+        next[ex] = { ...existing, ...patch, type: patch.type ?? existing.type };
+      } else {
+        const type = patch.type ?? (patch.paint ? "paint" : s.selEl);
+        next.push({ idx, type, ph: Math.random() * Math.PI * 2, ...patch });
+      }
       return next;
     });
   };
@@ -700,7 +708,64 @@ const App = () => {
       const chs = s.chars.split("");
       const ct = tm * 0.001 * charSpd;
 
-      cells.forEach((cel, idx) => {
+      // Lookup per-cell paint + overlays
+      const cellByIdx = new Map();
+      for (const c of cells) cellByIdx.set(c.idx, c);
+
+      // 1) Base layer (like char-grid): always-on string sequences
+      if (s.swissBaseOn && chs.length > 0) {
+        ctx.font = `${sz * 1.2}px ${getFontFamily()}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        for (let r = 0; r < s.rows; r++) {
+          for (let c = 0; c < s.cols; c++) {
+            const idxLinear = r * s.cols + c;
+            const cx = c * cw + cw / 2;
+            const cy = r * ch + ch / 2;
+
+            const entry = cellByIdx.get(idxLinear);
+            const paintCol = entry?.paint?.mode === "color" ? entry.paint.color : null;
+
+            if (paintCol && s.fillAs === "background") {
+              ctx.save();
+              ctx.fillStyle = paintCol;
+              ctx.globalAlpha = 0.9;
+              ctx.fillRect(c * cw, r * ch, cw, ch);
+              ctx.restore();
+            }
+
+            // If there's an overlay object, skip base glyph in that cell
+            const overlayType = entry?.type;
+            const hasOverlay = overlayType && overlayType !== "paint";
+            if (hasOverlay) continue;
+
+            const st = ct + (r + c) * s.stagger;
+            let ci = 0;
+            if (s.strBehave === "cycle") ci = (Math.floor(st * 3) + r + c) % chs.length;
+            else if (s.strBehave === "wave") {
+              const wv = Math.sin((c * 0.5 + r * 0.3 + st) * 0.8);
+              ci = Math.floor((wv + 1) * 0.5 * chs.length) % chs.length;
+            } else {
+              const sd = r * 1000 + c + Math.floor(st * 2);
+              ci = Math.floor((Math.sin(sd) * 0.5 + 0.5) * chs.length);
+            }
+
+            ctx.save();
+            if (paintCol && s.fillAs === "ink") ctx.fillStyle = paintCol;
+            const gr = (s.rot + aud * 45) * (Math.PI / 180);
+            ctx.translate(cx, cy);
+            if (gr !== 0) ctx.rotate(gr);
+            ctx.scale(1 + ease((bass + midi) * 0.3), 1 + ease((bass + midi) * 0.3));
+            ctx.fillText(chs[ci], 0, 0);
+            ctx.restore();
+          }
+        }
+      }
+
+      // 2) Overlays (drawn objects): dot/square/svg/char overrides, animated by swiss behavior
+      const overlayEntries = cells.filter((c) => c.type && c.type !== "paint");
+      overlayEntries.forEach((cel, idx) => {
         const col = cel.idx % s.cols;
         const row = Math.floor(cel.idx / s.cols);
         const cx = col * cw + cw / 2;
@@ -711,7 +776,6 @@ const App = () => {
 
         const paintCol = cel.paint?.mode === "color" ? cel.paint.color : null;
 
-        // optional fill background per painted cell
         if (paintCol && s.fillAs === "background") {
           ctx.save();
           ctx.fillStyle = paintCol;
@@ -726,10 +790,9 @@ const App = () => {
         const gr = (s.rot + aud * 45) * (Math.PI / 180);
         if (gr !== 0) ctx.rotate(gr);
 
-        // Painted ink
         if (paintCol && s.fillAs === "ink") ctx.fillStyle = paintCol;
 
-        // Advanced behaviors (kept)
+        // String physics behaviors
         if (s.behave === "string-wave") {
           const waveFreq = 2 + idx * 0.1;
           const waveAmp = sz * 0.3 * (1 + ab * 0.5);
@@ -754,12 +817,10 @@ const App = () => {
           ctx.rotate(bounce * 0.1);
         }
 
-        // draw element
         if (cel.type === "char" && chs.length > 0) {
           ctx.font = `${sz * 1.2}px ${getFontFamily()}`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-
           if (s.cycle === "crossfade") {
             const cf = (lt * 2) % chs.length;
             const ci = Math.floor(cf);
@@ -794,7 +855,6 @@ const App = () => {
         ctx.restore();
       });
 
-      // optional pixelation (kept)
       if (s.pixOn) {
         const img = ctx.getImageData(0, 0, w, h);
         const pix = ctx.createImageData(w, h);
