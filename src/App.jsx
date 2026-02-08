@@ -519,10 +519,32 @@ const App = () => {
     if (s.speedMode !== "bpm") return baseSpeed;
     const detected = bpmRef.current.smooth;
     const bpm = detected ?? s.bpmTarget;
-    // Map 120 BPM => baseSpeed (neutral)
     const factor = (bpm / 120) * s.bpmMultiply;
     return baseSpeed * factor;
   };
+
+  // --- Color string helpers ---
+  const parseColorSeq = React.useCallback(() => {
+    const raw = (s.colorSeq || "").split(",");
+    const parts = raw.map((x) => x.trim()).filter(Boolean);
+    const ok = parts.filter((c) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c));
+    return ok.length ? ok : ["#111111"];
+  }, [s.colorSeq]);
+
+  const colorSeqIndex = React.useCallback(
+    (st, r, c, len) => {
+      const beh = s.colorSeqBehave === "same" ? s.strBehave : s.colorSeqBehave;
+      if (len <= 1) return 0;
+      if (beh === "cycle") return (Math.floor(st * 3) + r + c) % len;
+      if (beh === "wave") {
+        const wv = Math.sin((c * 0.5 + r * 0.3 + st) * 0.8);
+        return Math.floor((wv + 1) * 0.5 * len) % len;
+      }
+      const sd = r * 1000 + c + Math.floor(st * 2);
+      return Math.floor((Math.sin(sd) * 0.5 + 0.5) * len);
+    },
+    [s.colorSeqBehave, s.strBehave]
+  );
 
   // --- Render ---
   const render = (tm = 0) => {
