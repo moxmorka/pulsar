@@ -78,9 +78,17 @@ export default function App() {
   // BPM
   const bpmRef = React.useRef({ bpm: null, smooth: null, lastUpdate: 0 });
 
-  // Image sampling
+  // Image sampling (single image for color sampling)
   const imgRef = React.useRef(null);
   const imgCanvasRef = React.useRef(null);
+
+  // Image String (5 images)
+  const imgSeqRef = React.useRef(
+    Array.from({ length: 5 }, () => ({ loaded: false, name: "", canvas: null }))
+  );
+  const [imgSeqInfo, setImgSeqInfo] = React.useState(
+    Array.from({ length: 5 }, () => ({ loaded: false, name: "" }))
+  );
 
   // Mobile controls drawer
   const [panelOpen, setPanelOpen] = React.useState(false);
@@ -100,7 +108,7 @@ export default function App() {
 
   // Painting state
   const [paint, setPaint] = React.useState({
-    mode: "none", // none | color | sample
+    mode: "none", // none | color | sample | imgseq
     color: "#111111",
     useSeq: false, // if true, painted cells use animated palette string
   });
@@ -176,6 +184,11 @@ export default function App() {
     // Image preview
     imgPreviewOn: false,
     imgPreviewAlpha: 0.15,
+
+    // Image String (5 images)
+    imgSeqOn: false,
+    imgSeqBehave: "same", // same | cycle | wave | random
+    imgSeqSpeed: 1,
   });
 
   const [svgPath, setSvgPath] = React.useState(null);
@@ -381,7 +394,7 @@ export default function App() {
     setCells((prev) => prev.map((c) => ({ ...c, ph: Math.random() * Math.PI * 2 })));
   };
 
-  // --- Image upload + build sampling canvas ---
+  // --- Image upload + build sampling canvas (single image for color sampling) ---
   const handleImageUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -401,6 +414,45 @@ export default function App() {
       img.src = ev.target.result;
     };
     reader.readAsDataURL(file);
+  };
+
+  // --- Image String upload (5 slots) ---
+  const handleImageSeqUpload = (slot, file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const off = document.createElement("canvas");
+        off.width = img.width;
+        off.height = img.height;
+        const octx = off.getContext("2d");
+        octx.drawImage(img, 0, 0);
+
+        imgSeqRef.current = imgSeqRef.current.map((x, i) =>
+          i === slot ? { loaded: true, name: file.name, canvas: off } : x
+        );
+
+        setImgSeqInfo((prev) => {
+          const n = [...prev];
+          n[slot] = { loaded: true, name: file.name };
+          return n;
+        });
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const clearImageSeqSlot = (slot) => {
+    imgSeqRef.current = imgSeqRef.current.map((x, i) =>
+      i === slot ? { loaded: false, name: "", canvas: null } : x
+    );
+    setImgSeqInfo((prev) => {
+      const n = [...prev];
+      n[slot] = { loaded: false, name: "" };
+      return n;
+    });
   };
 
   const sampleColorAtCanvasPoint = (cx, cy) => {
@@ -514,6 +566,68 @@ export default function App() {
     [palette, colorSeqIndex]
   );
 
+  // --- Image String helpers ---
+  const imageSeqReadyCount = React.useMemo(
+    () => imgSeqInfo.filter((x) => x.loaded).length,
+    [imgSeqInfo]
+  );
+
+  const imageSeqIndex = React.useCallback(
+    (st, r, c) => {
+      const beh = s.imgSeqBehave === "same" ? s.strBehave : s.imgSeqBehave;
+      const t = st * (s.imgSeqSpeed || 1);
+      if (beh === "cycle") return Math.floor(t * 3) + r + c;
+      if (beh === "wave") {
+        const wv = Math.sin((c * 0.5 + r * 0.3 + t) * 0.8);
+        return Math.floor((wv + 1) * 2.5);
+      }
+      const sd = r * 1000 + c + Math.floor(t * 2);
+      return Math.floor((Math.sin(sd) * 0.5 + 0.5) * 5);
+    },
+    [s.imgSeqBehave, s.strBehave, s.imgSeqSpeed]
+  );
+
+  const getImageSeqCanvasAt = React.useCallback(
+    (k) => {
+      const loaded = imgSeqRef.current.filter((x) => x.loaded && x.canvas);
+      if (loaded.length === 0) return null;
+      const idx = ((k % loaded.length) + loaded.length) % loaded.length;
+      return loaded[idx].canvas;
+    },
+    [imgSeqInfo]
+  );
+
+  const drawCoverCanvas = (ctx, srcCanvas, dx, dy, dw, dh) => {
+    if (!srcCanvas) return;
+    const sw = srcCanvas.width;
+    const sh = srcCanvas.height;
+    if (sw <= 0 || sh <= 0) return;
+
+    // cover crop source into destination
+    const scale = Math.max(dw / sw, dh / sh);
+    const cw = dw / scale;
+    const ch = dh / scale;
+    const sx = (sw - cw) / 2;
+    const sy = (sh - ch) / 2;
+
+    ctx.drawImage(srcCanvas, sx, sy, cw, ch, dx, dy, dw, dh);
+  };
+
+  const resolveFillImageCanvas = React.useCallback(
+    ({ paintObj, globalOn, st, r, c }) => {
+      if (paintObj?.mode === "imgseq") {
+        const k = imageSeqIndex(st, r, c);
+        return getImageSeqCanvasAt(k);
+      }
+      if (globalOn) {
+        const k = imageSeqIndex(st, r, c);
+        return getImageSeqCanvasAt(k);
+      }
+      return null;
+    },
+    [imageSeqIndex, getImageSeqCanvasAt]
+  );
+
   // --- Apply paint / draw ---
   const applyPaintToIdx = (idx, cx, cy) => {
     if (idx == null) return;
@@ -530,6 +644,13 @@ export default function App() {
       if (c) {
         setPaint((p) => ({ ...p, color: c, useSeq: false }));
         upsertCell(idx, { paint: { mode: "color", color: c } });
+      }
+      return;
+    }
+
+    if (paint.mode === "imgseq") {
+      if (imageSeqReadyCount > 0) {
+        upsertCell(idx, { paint: { mode: "imgseq" } });
       }
       return;
     }
@@ -743,6 +864,15 @@ export default function App() {
 
           const entry = cellByIdx.get(idxLinear);
           const fillCol = resolveFillColor({ paintObj: entry?.paint, st, r, c });
+          const imgBg = resolveFillImageCanvas({ paintObj: entry?.paint, globalOn: s.imgSeqOn, st, r, c });
+
+          if (imgBg) {
+            ctx.save();
+            ctx.globalAlpha = 1;
+            ctx.imageSmoothingEnabled = true;
+            drawCoverCanvas(ctx, imgBg, c * s.space, r * s.space, s.space, s.space);
+            ctx.restore();
+          }
 
           if (fillCol && s.fillAs === "background") {
             ctx.save();
@@ -816,6 +946,16 @@ export default function App() {
             const st = ct + (r + c) * s.stagger;
 
             const fillCol = resolveFillColor({ paintObj: entry?.paint, st, r, c });
+
+            const imgBg = resolveFillImageCanvas({ paintObj: entry?.paint, globalOn: s.imgSeqOn, st, r, c });
+            if (imgBg) {
+              ctx.save();
+              ctx.globalAlpha = 1;
+              ctx.imageSmoothingEnabled = true;
+              drawCoverCanvas(ctx, imgBg, c * cw, r * ch, cw, ch);
+              ctx.restore();
+            }
+
             if (fillCol && s.fillAs === "background") {
               ctx.save();
               ctx.fillStyle = fillCol;
@@ -874,6 +1014,14 @@ export default function App() {
         const ab = ease((bass + midi) * 0.5);
 
         const fillCol = resolveFillColor({ paintObj: cel.paint, st, r: row, c: col });
+        const imgBg = resolveFillImageCanvas({ paintObj: cel.paint, globalOn: s.imgSeqOn, st, r: row, c: col });
+        if (imgBg) {
+          ctx.save();
+          ctx.globalAlpha = 1;
+          ctx.imageSmoothingEnabled = true;
+          drawCoverCanvas(ctx, imgBg, col * cw, row * ch, cw, ch);
+          ctx.restore();
+        }
         if (fillCol && s.fillAs === "background") {
           ctx.save();
           ctx.fillStyle = fillCol;
@@ -1396,10 +1544,11 @@ export default function App() {
                 {imageInfo.loaded && <div className="text-[10px] text-green-700">✓ {imageInfo.name}</div>}
               </div>
               <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs" />
-              <div className="text-xs text-neutral-600">Tip: enable <span className="font-semibold">Sample</span>, then drag to paint sampled colors.</div>
+              <div className="text-xs text-neutral-600">
+                Tip: enable <span className="font-semibold">Sample</span>, then drag to paint sampled colors.
+              </div>
               <div className="mt-2 space-y-2">
                 <div className="flex items-center justify-between">
-                 etrn or toggle
                   <label className="text-xs font-semibold uppercase tracking-wider">Image Preview</label>
                   <button
                     onClick={() => setS((p) => ({ ...p, imgPreviewOn: !p.imgPreviewOn }))}
@@ -1409,7 +1558,9 @@ export default function App() {
                     {s.imgPreviewOn ? <Play size={14} fill="white" /> : <Square size={14} />}
                   </button>
                 </div>
-                <label className="block text-xs font-semibold uppercase tracking-wider">Opacity: {Math.round((s.imgPreviewAlpha ?? 0.15) * 100)}%</label>
+                <label className="block text-xs font-semibold uppercase tracking-wider">
+                  Opacity: {Math.round((s.imgPreviewAlpha ?? 0.15) * 100)}%
+                </label>
                 <input
                   type="range"
                   min="0"
@@ -1420,6 +1571,86 @@ export default function App() {
                   className="w-full"
                 />
               </div>
+            </div>
+
+            {/* Image String (5 images) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold uppercase tracking-wider flex items-center gap-2">
+                  <ImageIcon size={14} /> Image String
+                </label>
+                <button
+                  onClick={() => setS((p) => ({ ...p, imgSeqOn: !p.imgSeqOn }))}
+                  className={`p-1.5 rounded ${s.imgSeqOn ? "bg-black text-white" : "bg-neutral-200"}`}
+                  disabled={imageSeqReadyCount === 0}
+                  title="Toggle animated image string background"
+                >
+                  {s.imgSeqOn ? <Play size={14} fill="white" /> : <Square size={14} />}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-5 gap-2">
+                {imgSeqInfo.map((slot, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="h-9 w-full rounded-md border border-neutral-300 bg-white flex items-center justify-center">
+                      <span className={`text-[10px] ${slot.loaded ? "text-green-700" : "text-neutral-500"}`}>{slot.loaded ? "✓" : i + 1}</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleImageSeqUpload(i, e.target.files?.[0])}
+                      className="w-full text-[10px]"
+                      title={`Upload image ${i + 1}`}
+                    />
+                    {slot.loaded && (
+                      <button onClick={() => clearImageSeqSlot(i)} className="w-full text-[10px] text-red-600 hover:underline">
+                        remove
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <div className="text-xs text-neutral-600">Behavior</div>
+                  <select
+                    value={s.imgSeqBehave}
+                    onChange={(e) => setS((p) => ({ ...p, imgSeqBehave: e.target.value }))}
+                    className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+                  >
+                    <option value="same">Same as letters</option>
+                    <option value="cycle">Cycle</option>
+                    <option value="wave">Wave</option>
+                    <option value="random">Random</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-neutral-600">Speed</div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="4"
+                    step="0.05"
+                    value={s.imgSeqSpeed}
+                    onChange={(e) => setS((p) => ({ ...p, imgSeqSpeed: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={() => setPaint((p) => ({ ...p, mode: p.mode === "imgseq" ? "none" : "imgseq", useSeq: false }))}
+                className={`w-full px-3 py-2 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 min-h-[44px] ${
+                  paint.mode === "imgseq" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
+                }`}
+                disabled={imageSeqReadyCount === 0}
+                title="Paint cells with the image string"
+              >
+                <ImageIcon size={14} /> Paint with Image String
+              </button>
+
+              <div className="text-xs text-neutral-600">Mode A: cells get image backgrounds (cover tiles). Use global toggle for whole grid, or paint to apply per-cell.</div>
             </div>
           </div>
         )}
