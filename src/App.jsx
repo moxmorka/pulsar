@@ -172,6 +172,10 @@ export default function App() {
     colorSeqSpeed: 1,
     colorSeqStagger: 0.08,
     colorSeq: ["#111111", "#ff0055", "#00c2ff", "#00ff88", "#ffe600"],
+
+    // Image preview
+    imgPreviewOn: false,
+    imgPreviewAlpha: 0.15,
   });
 
   const [svgPath, setSvgPath] = React.useState(null);
@@ -959,8 +963,9 @@ export default function App() {
       });
     }
 
-    // Optional: show uploaded image faintly when sampling
-    if (paint.mode === "sample" && imgRef.current) {
+    // Optional: show uploaded image as a faint reference
+    const showRef = (paint.mode === "sample" || s.imgPreviewOn) && imgRef.current;
+    if (showRef) {
       const img = imgRef.current;
       const scale = Math.max(w / img.width, h / img.height);
       const dw = img.width * scale;
@@ -968,7 +973,7 @@ export default function App() {
       const ox = (w - dw) / 2;
       const oy = (h - dh) / 2;
       ctx.save();
-      ctx.globalAlpha = 0.15;
+      ctx.globalAlpha = s.imgPreviewAlpha ?? 0.15;
       ctx.drawImage(img, ox, oy, dw, dh);
       ctx.restore();
     }
@@ -1392,6 +1397,29 @@ export default function App() {
               </div>
               <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs" />
               <div className="text-xs text-neutral-600">Tip: enable <span className="font-semibold">Sample</span>, then drag to paint sampled colors.</div>
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center justify-between">
+                 etrn or toggle
+                  <label className="text-xs font-semibold uppercase tracking-wider">Image Preview</label>
+                  <button
+                    onClick={() => setS((p) => ({ ...p, imgPreviewOn: !p.imgPreviewOn }))}
+                    className={`p-1.5 rounded ${s.imgPreviewOn ? "bg-black text-white" : "bg-neutral-200"}`}
+                    title="Show/hide faint image overlay"
+                  >
+                    {s.imgPreviewOn ? <Play size={14} fill="white" /> : <Square size={14} />}
+                  </button>
+                </div>
+                <label className="block text-xs font-semibold uppercase tracking-wider">Opacity: {Math.round((s.imgPreviewAlpha ?? 0.15) * 100)}%</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.6"
+                  step="0.01"
+                  value={s.imgPreviewAlpha ?? 0.15}
+                  onChange={(e) => setS((p) => ({ ...p, imgPreviewAlpha: parseFloat(e.target.value) }))}
+                  className="w-full"
+                />
+              </div>
             </div>
           </div>
         )}
