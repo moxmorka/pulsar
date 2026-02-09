@@ -10,6 +10,7 @@ function detectBpmFromFloatBuffer(floatBuf, sampleRate, minBpm = 60, maxBpm = 20
   let mean = 0;
   for (let i = 0; i < floatBuf.length; i++) mean += floatBuf[i];
   mean /= floatBuf.length;
+
   const buf = new Float32Array(floatBuf.length);
   for (let i = 0; i < floatBuf.length; i++) buf[i] = floatBuf[i] - mean;
 
@@ -22,18 +23,15 @@ function detectBpmFromFloatBuffer(floatBuf, sampleRate, minBpm = 60, maxBpm = 20
   const minLag = Math.floor(sampleRate * (60 / maxBpm));
   const maxLag = Math.floor(sampleRate * (60 / minBpm));
 
-  // Autocorrelation
   let bestLag = -1;
   let bestCorr = 0;
 
-  // We don't need full O(n^2) precision; a smaller window works well.
   const N = buf.length;
   for (let lag = minLag; lag <= maxLag; lag++) {
     let corr = 0;
     for (let i = 0; i < N - lag; i++) corr += buf[i] * buf[i + lag];
     corr /= (N - lag);
 
-    // Prefer first strong peak; keep maximum.
     if (corr > bestCorr) {
       bestCorr = corr;
       bestLag = lag;
@@ -42,8 +40,6 @@ function detectBpmFromFloatBuffer(floatBuf, sampleRate, minBpm = 60, maxBpm = 20
 
   if (bestLag <= 0) return null;
 
-  // Confidence check: correlation peak relative to energy.
-  // This is heuristic; adjust if needed.
   const confidence = bestCorr / (energy + 1e-9);
   if (confidence < 0.15) return null;
 
@@ -71,8 +67,8 @@ const App = () => {
   const bpmRef = React.useRef({ bpm: null, smooth: null, lastUpdate: 0 });
 
   // Image sampling
-  const imgRef = React.useRef(null); // HTMLImageElement
-  const imgCanvasRef = React.useRef(null); // Offscreen canvas
+  const imgRef = React.useRef(null);
+  const imgCanvasRef = React.useRef(null);
 
   const [audioOn, setAudioOn] = React.useState(false);
   const [audioLvl, setAudioLvl] = React.useState(0);
@@ -121,7 +117,7 @@ const App = () => {
     rot: 0,
     cycle: "crossfade",
     behave: "pulse",
-    strBehave: "wave", // used by char-grid AND swiss-grid base string
+    strBehave: "wave",
     stagger: 0.08,
     draw: false,
     selEl: "char", // char | dot | square | svg
@@ -133,7 +129,7 @@ const App = () => {
 
     // BPM sync
     speedMode: "manual", // manual | bpm
-    bpmTarget: 120, // used when no detection available
+    bpmTarget: 120,
     bpmMultiply: 1,
 
     // Fill behavior
@@ -142,6 +138,12 @@ const App = () => {
     // Fonts
     googleFont: "Inter",
     customFont: null,
+
+    // (prepared for color strings; UI not shown yet)
+    colorSeq: "#111111,#ff0055,#00c2ff,#00ff88,#ffe600",
+    colorSeqBehave: "same",
+    colorSeqStagger: 0.08,
+    colorSeqOn: false,
   });
 
   const [svgPath, setSvgPath] = React.useState(null);
@@ -157,9 +159,7 @@ const App = () => {
         setAudioDevs(a);
         if (a.length > 0) setSelAudio(a[0].deviceId);
       })
-      .catch(() => {
-        // ignore
-      });
+      .catch(() => {});
   }, []);
 
   // --- MIDI ---
@@ -189,9 +189,7 @@ const App = () => {
     if (!audioOn) {
       try {
         if (audioCtxRef.current) audioCtxRef.current.close();
-      } catch {
-        // ignore
-      }
+      } catch {}
       audioCtxRef.current = null;
       analyserRef.current = null;
 
@@ -218,12 +216,11 @@ const App = () => {
         const freqData = new Uint8Array(an.frequencyBinCount);
         const timeData = new Float32Array(an.fftSize);
 
-        const upd = (t) => {
+        const upd = () => {
           if (!analyserRef.current || !audioCtxRef.current) return;
 
           analyserRef.current.getByteFrequencyData(freqData);
-          const b =
-            freqData.slice(0, 50).reduce((a, x) => a + x, 0) / 50 / 255;
+          const b = freqData.slice(0, 50).reduce((a, x) => a + x, 0) / 50 / 255;
           const o = freqData.reduce((a, x) => a + x, 0) / freqData.length / 255;
 
           smoothAudioRef.current += (o - smoothAudioRef.current) * 0.15;
@@ -231,7 +228,6 @@ const App = () => {
           setAudioLvl(smoothAudioRef.current);
           setBassLvl(smoothBassRef.current);
 
-          // BPM update ~ every 700ms
           const now = performance.now();
           if (now - bpmRef.current.lastUpdate > 700) {
             analyserRef.current.getFloatTimeDomainData(timeData);
@@ -249,9 +245,7 @@ const App = () => {
         };
         upd();
       })
-      .catch(() => {
-        setAudioOn(false);
-      });
+      .catch(() => setAudioOn(false));
 
     return () => {
       cancelled = true;
@@ -263,15 +257,15 @@ const App = () => {
     const p = [];
     for (let i = 0; i < 512; i++) p[i] = Math.floor(Math.random() * 256);
     return (x, y) => {
-      const X = Math.floor(x) & 255,
-        Y = Math.floor(y) & 255;
+      const X = Math.floor(x) & 255;
+      const Y = Math.floor(y) & 255;
       x -= Math.floor(x);
       y -= Math.floor(y);
       const f = (t) => t * t * t * (t * (t * 6 - 15) + 10);
-      const u = f(x),
-        v = f(y),
-        A = p[X] + Y,
-        B = p[X + 1] + Y;
+      const u = f(x);
+      const v = f(y);
+      const A = p[X] + Y;
+      const B = p[X + 1] + Y;
       const l = (t, a, b) => a + t * (b - a);
       return l(
         v,
@@ -290,14 +284,14 @@ const App = () => {
       dx = noise((x + t * 30) * f, y * f) * str;
       dy = noise((x + t * 30) * f + 100, (y + t * 20) * f + 100) * str;
     } else if (tp === "ripple") {
-      const d = Math.sqrt(x * x + y * y),
-        r = Math.sin((d - t * 40) * 0.015) * str;
+      const d = Math.sqrt(x * x + y * y);
+      const r = Math.sin((d - t * 40) * 0.015) * str;
       dx = (x / (d || 1)) * r;
       dy = (y / (d || 1)) * r;
     } else if (tp === "swirl") {
-      const a = Math.atan2(y, x),
-        rad = Math.sqrt(x * x + y * y),
-        na = a + t * 0.2 + (str * 0.0008) * (1 / (1 + rad * 0.01));
+      const a = Math.atan2(y, x);
+      const rad = Math.sqrt(x * x + y * y);
+      const na = a + t * 0.2 + (str * 0.0008) * (1 / (1 + rad * 0.01));
       dx = Math.cos(na) * rad - x;
       dy = Math.sin(na) * rad - y;
     }
@@ -310,13 +304,11 @@ const App = () => {
     (cx, cy) => {
       const cv = canvasRef.current;
       if (!cv) return null;
-      const cw = cv.width / s.cols,
-        ch = cv.height / s.rows;
-      const col = Math.floor(cx / cw),
-        row = Math.floor(cy / ch);
-      return col >= 0 && col < s.cols && row >= 0 && row < s.rows
-        ? row * s.cols + col
-        : null;
+      const cw = cv.width / s.cols;
+      const ch = cv.height / s.rows;
+      const col = Math.floor(cx / cw);
+      const row = Math.floor(cy / ch);
+      return col >= 0 && col < s.cols && row >= 0 && row < s.rows ? row * s.cols + col : null;
     },
     [s.cols, s.rows]
   );
@@ -350,12 +342,9 @@ const App = () => {
     return '-apple-system, "SF Pro Display", sans-serif';
   };
 
-  // --- Create / Clear ---
+  // --- Re-seed ---
   const gen = () => {
-    // Keep painted cells, but refresh random phase so string behaviors evolve.
-    setCells((prev) =>
-      prev.map((c) => ({ ...c, ph: Math.random() * Math.PI * 2 }))
-    );
+    setCells((prev) => prev.map((c) => ({ ...c, ph: Math.random() * Math.PI * 2 })));
   };
 
   // --- Image upload + build sampling canvas ---
@@ -367,7 +356,6 @@ const App = () => {
       const img = new window.Image();
       img.onload = () => {
         imgRef.current = img;
-        // Prepare offscreen canvas sized to image
         const off = document.createElement("canvas");
         off.width = img.width;
         off.height = img.height;
@@ -387,7 +375,6 @@ const App = () => {
     const off = imgCanvasRef.current;
     if (!cv || !img || !off) return null;
 
-    // Map canvas coordinates -> image coordinates assuming image is fit-cover to canvas
     const cw = cv.width,
       ch = cv.height;
     const iw = img.width,
@@ -410,7 +397,7 @@ const App = () => {
     return hexFromRgb(px[0], px[1], px[2]);
   };
 
-  // --- Cell mutators (type + optional paint) ---
+  // --- Cell mutators ---
   const upsertCell = (idx, patch) => {
     setCells((prev) => {
       const ex = prev.findIndex((c) => c.idx === idx);
@@ -426,11 +413,9 @@ const App = () => {
     });
   };
 
-  const removeCell = (idx) => {
-    setCells((prev) => prev.filter((c) => c.idx !== idx));
-  };
+  const removeCell = (idx) => setCells((prev) => prev.filter((c) => c.idx !== idx));
 
-  // --- Click / paint ---
+  // --- Pointer to canvas (works for mouse/touch/pen via PointerEvents) ---
   const pointerToCanvas = (e) => {
     const cv = canvasRef.current;
     const r = cv.getBoundingClientRect();
@@ -442,7 +427,6 @@ const App = () => {
   const applyPaintToIdx = (idx, cx, cy) => {
     if (idx == null) return;
 
-    // Paint modes apply to existing string behaviors because idx stays stable.
     if (paint.mode === "color") {
       upsertCell(idx, { paint: { mode: "color", color: paint.color } });
       return;
@@ -456,31 +440,38 @@ const App = () => {
       return;
     }
 
-    // Otherwise draw elements (existing behavior)
     upsertCell(idx, { type: s.selEl, ph: Math.random() * Math.PI * 2 });
   };
 
-  const clk = (e) => {
+  // Clamp menu to viewport (mobile safe)
+  const openMenuAt = (clientX, clientY, idx) => {
+    const pad = 12;
+    const menuW = 210;
+    const menuH = 230;
+    const x = clamp(clientX, pad, window.innerWidth - menuW - pad);
+    const y = clamp(clientY, pad, window.innerHeight - menuH - pad);
+    setMenu({ x, y, idx });
+  };
+
+  const down = (e) => {
     const interactive = s.pat === "swiss-grid" || s.pat === "char-grid";
     if (!interactive) return;
+
+    try {
+      e.currentTarget?.setPointerCapture?.(e.pointerId);
+    } catch {}
 
     const { x, y } = pointerToCanvas(e);
     const idx = getIdx(x, y);
     if (idx === null) return;
 
     if (s.draw) {
+      setDrawing(true);
       applyPaintToIdx(idx, x, y);
     } else {
-      e.preventDefault();
-      setMenu({ x: e.clientX, y: e.clientY, idx });
+      e.preventDefault?.();
+      openMenuAt(e.clientX ?? 0, e.clientY ?? 0, idx);
     }
-  };
-
-  const down = (e) => {
-    const interactive = s.pat === "swiss-grid" || s.pat === "char-grid";
-    if (!interactive || !s.draw) return;
-    setDrawing(true);
-    clk(e);
   };
 
   const move = (e) => {
@@ -511,7 +502,11 @@ const App = () => {
   React.useEffect(() => {
     const cl = () => setMenu(null);
     window.addEventListener("click", cl);
-    return () => window.removeEventListener("click", cl);
+    window.addEventListener("touchstart", cl, { passive: true });
+    return () => {
+      window.removeEventListener("click", cl);
+      window.removeEventListener("touchstart", cl);
+    };
   }, []);
 
   // --- BPM-synced speed mapping ---
@@ -522,29 +517,6 @@ const App = () => {
     const factor = (bpm / 120) * s.bpmMultiply;
     return baseSpeed * factor;
   };
-
-  // --- Color string helpers ---
-  const parseColorSeq = React.useCallback(() => {
-    const raw = (s.colorSeq || "").split(",");
-    const parts = raw.map((x) => x.trim()).filter(Boolean);
-    const ok = parts.filter((c) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c));
-    return ok.length ? ok : ["#111111"];
-  }, [s.colorSeq]);
-
-  const colorSeqIndex = React.useCallback(
-    (st, r, c, len) => {
-      const beh = s.colorSeqBehave === "same" ? s.strBehave : s.colorSeqBehave;
-      if (len <= 1) return 0;
-      if (beh === "cycle") return (Math.floor(st * 3) + r + c) % len;
-      if (beh === "wave") {
-        const wv = Math.sin((c * 0.5 + r * 0.3 + st) * 0.8);
-        return Math.floor((wv + 1) * 0.5 * len) % len;
-      }
-      const sd = r * 1000 + c + Math.floor(st * 2);
-      return Math.floor((Math.sin(sd) * 0.5 + 0.5) * len);
-    },
-    [s.colorSeqBehave, s.strBehave]
-  );
 
   // --- Render ---
   const render = (tm = 0) => {
@@ -561,10 +533,8 @@ const App = () => {
     const aud = smoothAudioRef.current * s.audioSens;
     const bass = smoothBassRef.current * s.audioSens;
 
-    // BPM sync applies to distortion and character speeds (and therefore both swiss-grid + char-grid)
     const distSpd = getSpeedFactor(s.distSpd);
     const charSpd = getSpeedFactor(s.charSpd);
-
     const at = tm * 0.001 * distSpd;
 
     ctx.fillStyle = "#0A0A0A";
@@ -607,7 +577,7 @@ const App = () => {
       }
     } else if (s.pat === "dots") {
       const ds = s.dotSz * (1 + (bass + midi) * 0.6);
-      for (let y = 0; y < h; y += s.space)
+      for (let y = 0; y < h; y += s.space) {
         for (let x = 0; x < w; x += s.space) {
           let dx = x,
             dy = y;
@@ -620,9 +590,10 @@ const App = () => {
           ctx.arc(dx, dy, ds, 0, Math.PI * 2);
           ctx.fill();
         }
+      }
     } else if (s.pat === "squares") {
       const ss = s.shapeSz * (1 + (bass + midi) * 0.6);
-      for (let y = 0; y < h; y += s.space)
+      for (let y = 0; y < h; y += s.space) {
         for (let x = 0; x < w; x += s.space) {
           let dx = x,
             dy = y;
@@ -633,11 +604,12 @@ const App = () => {
           }
           ctx.fillRect(dx - ss / 2, dy - ss / 2, ss, ss);
         }
+      }
     } else if (s.pat === "text") {
       ctx.font = `600 ${s.fontSz}px ${getFontFamily()}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      for (let y = 0; y < h; y += s.space)
+      for (let y = 0; y < h; y += s.space) {
         for (let x = 0; x < w; x += s.space) {
           ctx.save();
           ctx.translate(x, y);
@@ -647,8 +619,8 @@ const App = () => {
           ctx.fillText(s.txt, 0, 0);
           ctx.restore();
         }
+      }
     } else if (s.pat === "char-grid") {
-      // Determine implicit grid size based on spacing
       const cols = Math.max(1, Math.floor(w / s.space));
       const rows = Math.max(1, Math.floor(h / s.space));
 
@@ -659,7 +631,6 @@ const App = () => {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
-      // quick lookup for painted cells by idx
       const paintMap = new Map();
       for (const c of cells) paintMap.set(c.idx, c);
 
@@ -685,7 +656,6 @@ const App = () => {
           const painted = paintMap.get(idxLinear);
           const pcol = painted?.paint?.mode === "color" ? painted.paint.color : null;
 
-          // Fill connects to string behavior: color is stable per cell, while glyph changes via string behavior.
           if (pcol && s.fillAs === "background") {
             ctx.save();
             ctx.fillStyle = pcol;
@@ -695,7 +665,6 @@ const App = () => {
           }
 
           ctx.save();
-          // If fillAs=ink, use the painted color as glyph ink
           if (pcol && s.fillAs === "ink") ctx.fillStyle = pcol;
           ctx.translate(x, y);
           ctx.scale(1 + ease((bass + midi) * 0.3), 1 + ease((bass + midi) * 0.3));
@@ -730,11 +699,9 @@ const App = () => {
       const chs = s.chars.split("");
       const ct = tm * 0.001 * charSpd;
 
-      // Lookup per-cell paint + overlays
       const cellByIdx = new Map();
       for (const c of cells) cellByIdx.set(c.idx, c);
 
-      // 1) Base layer (like char-grid): always-on string sequences
       if (s.swissBaseOn && chs.length > 0) {
         ctx.font = `${sz * 1.2}px ${getFontFamily()}`;
         ctx.textAlign = "center";
@@ -757,7 +724,6 @@ const App = () => {
               ctx.restore();
             }
 
-            // If there's an overlay object, skip base glyph in that cell
             const overlayType = entry?.type;
             const hasOverlay = overlayType && overlayType !== "paint";
             if (hasOverlay) continue;
@@ -785,7 +751,6 @@ const App = () => {
         }
       }
 
-      // 2) Overlays (drawn objects): dot/square/svg/char overrides, animated by swiss behavior
       const overlayEntries = cells.filter((c) => c.type && c.type !== "paint");
       overlayEntries.forEach((cel, idx) => {
         const col = cel.idx % s.cols;
@@ -814,7 +779,6 @@ const App = () => {
 
         if (paintCol && s.fillAs === "ink") ctx.fillStyle = paintCol;
 
-        // String physics behaviors
         if (s.behave === "string-wave") {
           const waveFreq = 2 + idx * 0.1;
           const waveAmp = sz * 0.3 * (1 + ab * 0.5);
@@ -876,31 +840,8 @@ const App = () => {
 
         ctx.restore();
       });
-
-      if (s.pixOn) {
-        const img = ctx.getImageData(0, 0, w, h);
-        const pix = ctx.createImageData(w, h);
-        const ps = s.pixSz;
-        for (let y = 0; y < h; y += ps)
-          for (let x = 0; x < w; x += ps) {
-            const i = (y * w + x) * 4;
-            const r = img.data[i],
-              g = img.data[i + 1],
-              b = img.data[i + 2];
-            for (let py = 0; py < ps && y + py < h; py++)
-              for (let px = 0; px < ps && x + px < w; px++) {
-                const pi = ((y + py) * w + (x + px)) * 4;
-                pix.data[pi] = r;
-                pix.data[pi + 1] = g;
-                pix.data[pi + 2] = b;
-                pix.data[pi + 3] = 255;
-              }
-          }
-        ctx.putImageData(pix, 0, 0);
-      }
     }
 
-    // (optional) show uploaded image faintly as reference when sampling
     if (paint.mode === "sample" && imgRef.current) {
       const img = imgRef.current;
       const scale = Math.max(w / img.width, h / img.height);
@@ -925,27 +866,35 @@ const App = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s, cells, svgPath, paint]);
 
-  // canvas resize
+  // canvas resize (mobile address bar / rotation safe)
   React.useEffect(() => {
     const rsz = () => {
-      if (canvasRef.current) {
-        canvasRef.current.width = canvasRef.current.offsetWidth;
-        canvasRef.current.height = canvasRef.current.offsetHeight;
-      }
+      const cv = canvasRef.current;
+      if (!cv) return;
+      cv.width = cv.offsetWidth;
+      cv.height = cv.offsetHeight;
     };
     rsz();
     window.addEventListener("resize", rsz);
-    return () => window.removeEventListener("resize", rsz);
+    window.addEventListener("orientationchange", rsz);
+    return () => {
+      window.removeEventListener("resize", rsz);
+      window.removeEventListener("orientationchange", rsz);
+    };
+  }, []);
+
+  // Disable touch gestures on canvas (prevents page scroll while drawing)
+  React.useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    cv.style.touchAction = "none";
   }, []);
 
   // load google font
   React.useEffect(() => {
     if (!s.googleFont) return;
     const link = document.createElement("link");
-    link.href = `https://fonts.googleapis.com/css2?family=${s.googleFont.replace(
-      / /g,
-      "+"
-    )}:wght@400;600;700&display=swap`;
+    link.href = `https://fonts.googleapis.com/css2?family=${s.googleFont.replace(/ /g, "+")}:wght@400;600;700&display=swap`;
     link.rel = "stylesheet";
     document.head.appendChild(link);
     return () => document.head.removeChild(link);
@@ -988,12 +937,13 @@ const App = () => {
   const bpmDisplay = bpmRef.current.smooth;
 
   return (
-    <div className="w-full h-screen bg-white flex">
-      <div className="w-80 bg-neutral-50 border-r border-neutral-200 p-5 overflow-y-auto space-y-4 text-sm">
+    <div className="w-full h-[100svh] bg-white flex flex-col md:flex-row">
+      {/* Sidebar (top on mobile, left on desktop) */}
+      <div className="w-full md:w-80 bg-neutral-50 border-b md:border-b-0 md:border-r border-neutral-200 p-4 md:p-5 overflow-y-auto space-y-4 text-sm">
         <div className="flex gap-2">
           <button
             onClick={gen}
-            className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800"
+            className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800 min-h-[44px]"
             title="Re-seed phases"
           >
             <RotateCcw size={16} />
@@ -1005,7 +955,7 @@ const App = () => {
               l.href = canvasRef.current.toDataURL();
               l.click();
             }}
-            className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800"
+            className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800 min-h-[44px]"
             title="Download PNG"
           >
             <Download size={16} />
@@ -1060,7 +1010,9 @@ const App = () => {
                 onChange={(e) => setS((p) => ({ ...p, bpmTarget: parseInt(e.target.value) }))}
                 className="w-full"
               />
-              <label className="block text-xs font-semibold uppercase tracking-wider">Multiplier: {s.bpmMultiply.toFixed(2)}×</label>
+              <label className="block text-xs font-semibold uppercase tracking-wider">
+                Multiplier: {s.bpmMultiply.toFixed(2)}×
+              </label>
               <input
                 type="range"
                 min="0.25"
@@ -1182,7 +1134,7 @@ const App = () => {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setPaint((p) => ({ ...p, mode: p.mode === "color" ? "none" : "color" }))}
-                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 ${
+                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 min-h-[44px] ${
                   paint.mode === "color" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
                 }`}
                 title="Paint with selected color"
@@ -1192,10 +1144,10 @@ const App = () => {
               </button>
               <button
                 onClick={() => setPaint((p) => ({ ...p, mode: p.mode === "sample" ? "none" : "sample" }))}
-                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 ${
+                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 min-h-[44px] ${
                   paint.mode === "sample" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
                 }`}
-                title="Click cells to sample from uploaded image"
+                title="Drag on canvas to sample from uploaded image"
                 disabled={!imageInfo.loaded}
               >
                 <ImageIcon size={14} />
@@ -1219,7 +1171,6 @@ const App = () => {
                 value={s.fillAs}
                 onChange={(e) => setS((p) => ({ ...p, fillAs: e.target.value }))}
                 className="px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                title="Apply color as background fill or ink"
               >
                 <option value="background">Background</option>
                 <option value="ink">Ink</option>
@@ -1235,13 +1186,13 @@ const App = () => {
               </div>
               <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs" />
               <div className="text-xs text-neutral-600">
-                Tip: enable <span className="font-semibold">Sample</span>, then click-drag cells to paint sampled colors.
+                Tip: enable <span className="font-semibold">Sample</span>, then drag on the canvas to paint sampled colors.
               </div>
             </div>
           </div>
         )}
 
-        {/* Grid controls (Swiss) */}
+        {/* Swiss-grid controls */}
         {s.pat === "swiss-grid" && (
           <>
             <div className="space-y-2">
@@ -1290,7 +1241,7 @@ const App = () => {
 
             <button
               onClick={() => setCells([])}
-              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black"
+              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black min-h-[44px]"
             >
               Clear
             </button>
@@ -1414,7 +1365,7 @@ const App = () => {
 
             <button
               onClick={() => setCells([])}
-              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black"
+              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black min-h-[44px]"
             >
               Clear Painted Cells
             </button>
@@ -1448,15 +1399,17 @@ const App = () => {
         </div>
       </div>
 
-      <div className="flex-1 p-8 bg-white relative">
+      {/* Canvas */}
+      <div className="flex-1 min-h-0 p-2 md:p-8 bg-white relative">
         <canvas
           ref={canvasRef}
-          className="w-full h-full rounded-lg shadow-sm"
-          onClick={clk}
-          onMouseDown={down}
-          onMouseMove={move}
-          onMouseUp={up}
-          onMouseLeave={up}
+          className="w-full h-full rounded-lg shadow-sm touch-none"
+          onPointerDown={down}
+          onPointerMove={move}
+          onPointerUp={up}
+          onPointerLeave={up}
+          onPointerCancel={up}
+          onContextMenu={(e) => e.preventDefault()}
         />
 
         {menu && (
@@ -1471,7 +1424,10 @@ const App = () => {
             <button onClick={() => add("dot")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
               Add Dot
             </button>
-            <button onClick={() => add("square")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+            <button
+              onClick={() => add("square")}
+              className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm"
+            >
               Add Square
             </button>
             <button
