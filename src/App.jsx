@@ -7,8 +7,6 @@ import {
   Image as ImageIcon,
   Wand2,
   Palette,
-  Type,
-  Grid3X3,
 } from "lucide-react";
 
 /* -------------------- utils -------------------- */
