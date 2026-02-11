@@ -12,9 +12,7 @@ import {
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 
-// --- BPM detection (autocorrelation over time-domain) ---
 function detectBpmFromFloatBuffer(floatBuf, sampleRate, minBpm = 60, maxBpm = 200) {
-  // Remove DC
   let mean = 0;
   for (let i = 0; i < floatBuf.length; i++) mean += floatBuf[i];
   mean /= floatBuf.length;
@@ -22,7 +20,6 @@ function detectBpmFromFloatBuffer(floatBuf, sampleRate, minBpm = 60, maxBpm = 20
   const buf = new Float32Array(floatBuf.length);
   for (let i = 0; i < floatBuf.length; i++) buf[i] = floatBuf[i] - mean;
 
-  // Energy gate (avoid false positives in silence)
   let energy = 0;
   for (let i = 0; i < buf.length; i++) energy += buf[i] * buf[i];
   energy /= buf.length;
@@ -64,26 +61,24 @@ function isHexColor(s) {
   return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s);
 }
 
-// ---------- Variable grid helpers ----------
+// ---------------- Variable grid helpers (for densify region) ----------------
 const gaussian = (x, sigma) => {
   const s2 = (sigma * sigma) || 1e-6;
   return Math.exp(-(x * x) / (2 * s2));
 };
 
 function buildVariableEdges(count, focus, strength, sigma) {
-  // Returns normalized edges array length count+1, monotonic 0..1
   const n = Math.max(1, count);
   const f = clamp(focus ?? 0.5, 0, 1);
   const st = Math.max(0, strength ?? 0);
   const sg = clamp(sigma ?? 0.18, 0.03, 0.6);
 
-  // smaller weight => narrower => denser around focus
   const w = new Array(n);
   let sum = 0;
   for (let i = 0; i < n; i++) {
     const u = (i + 0.5) / n;
     const g = gaussian(u - f, sg);
-    const wi = 1 / (1 + st * g);
+    const wi = 1 / (1 + st * g); // smaller => denser
     w[i] = wi;
     sum += wi;
   }
@@ -113,12 +108,12 @@ function findIndexFromEdges(edges, v01) {
   return clamp(lo, 0, edges.length - 2);
 }
 
-// ---------- Span text chopped helper ----------
+// ---------------- Span: old “draw on top” mode (kept as option) -------------
 function drawSpanTextChopped({
   ctx,
   text,
   region, // {x,y,w,h,r0,c0,rN,cN}
-  getCellRect, // (r,c)=>{x,y,w,h}
+  getCellRect,
   fontFamily,
   fontScale,
   tracking,
@@ -173,6 +168,120 @@ function drawSpanTextChopped({
       ctx.restore();
     }
   }
+  ctx.restore();
+}
+
+// ---------------- Span: NEW “fill cells from text mask” mode ----------------
+function fillCellsFromTextMask({
+  ctx,
+  text,
+  region, // {x,y,w,h,r0,c0,rN,cN}
+  getCellRect,
+  fontFamily,
+  fontScale,
+  tracking,
+  align,
+  fillColor,
+  threshold = 0.18,
+  maskScale = 2,
+}) {
+  if (!text) return;
+
+  const { x, y, w, h, r0, c0, rN, cN } = region;
+  const sc = clamp(maskScale ?? 2, 1, 4);
+
+  const mw = Math.max(1, Math.floor(w * sc));
+  const mh = Math.max(1, Math.floor(h * sc));
+  const m = document.createElement("canvas");
+  m.width = mw;
+  m.height = mh;
+  const mctx = m.getContext("2d", { willReadFrequently: true });
+
+  mctx.clearRect(0, 0, mw, mh);
+
+  const fontPx = Math.max(8, Math.min(h, w) * 0.75 * (fontScale || 1));
+  mctx.font = `700 ${fontPx * sc}px ${fontFamily}`;
+  mctx.textBaseline = "middle";
+  mctx.textAlign = "left";
+
+  const padX = Math.max(6, w * 0.06);
+  const tx = align === "center" ? w * 0.5 : padX;
+  const ty = h * 0.5;
+
+  const drawText = (x0, y0) => {
+    if (!tracking) {
+      if (align === "center") {
+        mctx.textAlign = "center";
+        mctx.fillText(text, x0 * sc, y0 * sc);
+        mctx.textAlign = "left";
+      } else {
+        mctx.fillText(text, x0 * sc, y0 * sc);
+      }
+      return;
+    }
+
+    let x = x0;
+    if (align === "center") {
+      let width = 0;
+      for (const ch of text) width += mctx.measureText(ch).width + tracking * sc;
+      width -= tracking * sc;
+      x = x0 - width / (2 * sc);
+    }
+    for (const ch of text) {
+      mctx.fillText(ch, x * sc, y0 * sc);
+      x += (mctx.measureText(ch).width + tracking * sc) / sc;
+    }
+  };
+
+  mctx.fillStyle = "#000";
+  drawText(tx, ty);
+
+  const img = mctx.getImageData(0, 0, mw, mh).data;
+
+  ctx.save();
+  ctx.fillStyle = fillColor || "#000";
+
+  for (let rr = r0; rr < rN; rr++) {
+    for (let cc = c0; cc < cN; cc++) {
+      const cell = getCellRect(rr, cc);
+
+      const cx0 = Math.floor(((cell.x - x) / w) * mw);
+      const cy0 = Math.floor(((cell.y - y) / h) * mh);
+      const cx1 = Math.ceil(((cell.x + cell.w - x) / w) * mw);
+      const cy1 = Math.ceil(((cell.y + cell.h - y) / h) * mh);
+
+      const ax0 = clamp(cx0, 0, mw);
+      const ay0 = clamp(cy0, 0, mh);
+      const ax1 = clamp(cx1, 0, mw);
+      const ay1 = clamp(cy1, 0, mh);
+
+      const ww = Math.max(0, ax1 - ax0);
+      const hh = Math.max(0, ay1 - ay0);
+      if (ww === 0 || hh === 0) continue;
+
+      const sx = Math.max(3, Math.floor(ww / 10));
+      const sy = Math.max(3, Math.floor(hh / 10));
+
+      let hits = 0;
+      let total = 0;
+
+      for (let yy = ay0; yy < ay1; yy += sy) {
+        for (let xx = ax0; xx < ax1; xx += sx) {
+          const i = (yy * mw + xx) * 4;
+          const a = img[i + 3] / 255;
+          const lum = (img[i] + img[i + 1] + img[i + 2]) / (3 * 255);
+          const ink = a > 0 ? a : 1 - lum;
+          if (ink > 0.2) hits++;
+          total++;
+        }
+      }
+
+      const coverage = total ? hits / total : 0;
+      if (coverage >= threshold) {
+        ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+      }
+    }
+  }
 
   ctx.restore();
 }
@@ -192,14 +301,11 @@ export default function App() {
   const smoothAudioRef = React.useRef(0);
   const smoothBassRef = React.useRef(0);
 
-  // BPM
   const bpmRef = React.useRef({ bpm: null, smooth: null, lastUpdate: 0 });
 
-  // Image sampling (single image for color sampling)
   const imgRef = React.useRef(null);
   const imgCanvasRef = React.useRef(null);
 
-  // Image String (5 images)
   const imgSeqRef = React.useRef(
     Array.from({ length: 5 }, () => ({ loaded: false, name: "", canvas: null }))
   );
@@ -207,11 +313,10 @@ export default function App() {
     Array.from({ length: 5 }, () => ({ loaded: false, name: "" }))
   );
 
-  // Mobile controls drawer
   const [panelOpen, setPanelOpen] = React.useState(false);
 
   const [audioOn, setAudioOn] = React.useState(false);
-  const [audioMode, setAudioMode] = React.useState("mic"); // mic | file
+  const [audioMode, setAudioMode] = React.useState("mic");
   const [audioFileUrl, setAudioFileUrl] = React.useState("");
   const [audioFileName, setAudioFileName] = React.useState("");
   const [audioFilePlaying, setAudioFilePlaying] = React.useState(false);
@@ -227,11 +332,10 @@ export default function App() {
   const [audioDevs, setAudioDevs] = React.useState([]);
   const [selAudio, setSelAudio] = React.useState("");
 
-  // Painting state
   const [paint, setPaint] = React.useState({
-    mode: "none", // none | color | sample | imgseq
+    mode: "none",
     color: "#111111",
-    useSeq: false, // if true, painted cells use animated palette string
+    useSeq: false,
   });
 
   const [imageInfo, setImageInfo] = React.useState({ loaded: false, name: "" });
@@ -239,7 +343,6 @@ export default function App() {
   const [s, setS] = React.useState({
     pat: "swiss-grid",
 
-    // common
     thick: 2,
     space: 40,
 
@@ -269,55 +372,39 @@ export default function App() {
     cycle: "crossfade",
     behave: "string-wave",
 
-    // string behavior shared (char-grid + swiss-grid base)
-    strBehave: "wave", // cycle | wave | random | squeeze
+    strBehave: "wave",
     stagger: 0.08,
 
-    // "String % / squeeze" behaviour controls
-    squeezeAmt: 0.85, // 0..0.98
-    squeezeSpd: 1.5, // speed multiplier
-    squeezeFlow: 1.0, // how fast the text scrolls horizontally
-    squeezeDensity: 1.0, // glyph spacing multiplier (smaller => denser)
+    squeezeAmt: 0.85,
+    squeezeSpd: 1.5,
+    squeezeFlow: 1.0,
+    squeezeDensity: 1.0,
 
-    // Swiss grid: base always-on string glyphs
     swissBaseOn: true,
     swissCharScale: 1,
 
-    // BPM sync
-    speedMode: "manual", // manual | bpm
+    speedMode: "manual",
     bpmTarget: 120,
     bpmMultiply: 1,
 
-    // Fill behavior
-    fillAs: "background", // background | ink
+    fillAs: "background",
 
-    // Fonts
     googleFont: "Inter",
     customFont: null,
 
-    // Color sequence (5 colors) + animation
     colorSeqOn: false,
-    colorSeqBehave: "same", // same | cycle | wave | random
+    colorSeqBehave: "same",
     colorSeqSpeed: 1,
     colorSeq: ["#111111", "#ff0055", "#00c2ff", "#00ff88", "#ffe600"],
 
-    // Image preview
     imgPreviewOn: false,
     imgPreviewAlpha: 0.15,
 
-    // Image String (5 images)
     imgSeqOn: false,
-    imgSeqBehave: "same", // same | cycle | wave | random
+    imgSeqBehave: "same",
     imgSeqSpeed: 1,
 
-    // legacy radial settings (still present, but disabled if variable edges are on)
-    radialGridOn: false,
-    gridCenterX: 0.5,
-    gridCenterY: 0.5,
-    radialStrength: 1.2,
-    radialMaxScale: 2.2,
-
-    // NEW: Variable column/row widths (density focus)
+    // Variable grid density (move vertical/horizontal lines)
     varColsOn: false,
     colFocus: 0.5,
     colStrength: 6,
@@ -328,18 +415,23 @@ export default function App() {
     rowStrength: 6,
     rowSigma: 0.18,
 
-    // NEW: Span text (works on swiss + char grid)
+    // Span text region + rendering
     spanOn: false,
-    spanText: "TYPE HERE",
+    spanText: "TYPE",
     spanRow: 0,
     spanCol: 0,
     spanCols: 8,
-    spanRows: 1,
+    spanRows: 3,
     spanFontScale: 1.0,
     spanTracking: 0,
-    spanAlign: "left", // left | center
+    spanAlign: "center",
 
-    // drawing tool
+    // ✅ NEW: fill-cells mask mode
+    spanFillOn: true,
+    spanFillColor: "#000000",
+    spanFillThreshold: 0.18,
+    spanMaskScale: 2,
+
     selEl: "char",
     draw: false,
   });
@@ -374,7 +466,6 @@ export default function App() {
           const [st, n, v] = e.data;
           const msg = st >> 4;
 
-          // Note on
           if (msg === 9 && v > 0) {
             midiNoteRef.current = n;
             midiVelRef.current = v / 127;
@@ -382,7 +473,6 @@ export default function App() {
             midiVelRef.current = 0;
           }
 
-          // CC: treat as mild activity too
           if (msg === 11) {
             midiVelRef.current = Math.max(midiVelRef.current, (v ?? 0) / 127);
           }
@@ -392,7 +482,7 @@ export default function App() {
     });
   }, [midiOn]);
 
-  // --- Audio + Levels + BPM (mic OR uploaded audio file) ---
+  // --- Audio + Levels + BPM ---
   React.useEffect(() => {
     if (!audioOn) {
       try {
@@ -402,9 +492,7 @@ export default function App() {
         }
       } catch {}
       try {
-        if (micStreamRef.current) {
-          micStreamRef.current.getTracks().forEach((t) => t.stop());
-        }
+        if (micStreamRef.current) micStreamRef.current.getTracks().forEach((t) => t.stop());
       } catch {}
       micStreamRef.current = null;
 
@@ -453,7 +541,6 @@ export default function App() {
       setAudioLvl(smoothAudioRef.current);
       setBassLvl(smoothBassRef.current);
 
-      // BPM update ~ every 700ms
       const now = performance.now();
       if (now - bpmRef.current.lastUpdate > 700) {
         const td = new Float32Array(an.fftSize);
@@ -576,7 +663,16 @@ export default function App() {
     return { x: dx, y: dy };
   };
 
-  // --- Variable edges for swiss-grid ---
+  // --- Speed mapping (manual vs BPM) ---
+  const getSpeedFactor = (baseSpeed) => {
+    if (s.speedMode !== "bpm") return baseSpeed;
+    const detected = bpmRef.current.smooth;
+    const bpm = detected ?? s.bpmTarget;
+    const factor = (bpm / 120) * s.bpmMultiply;
+    return baseSpeed * factor;
+  };
+
+  // --- Variable edges (swiss-grid) ---
   const colEdges = React.useMemo(() => {
     if (s.pat !== "swiss-grid") return null;
     return s.varColsOn
@@ -590,8 +686,6 @@ export default function App() {
       ? buildVariableEdges(s.rows, s.rowFocus, s.rowStrength, s.rowSigma)
       : Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
   }, [s.pat, s.rows, s.varRowsOn, s.rowFocus, s.rowStrength, s.rowSigma]);
-
-  const varEdgesOn = s.varColsOn || s.varRowsOn;
 
   // --- Helpers: indices ---
   const getSwissIdx = React.useCallback(
@@ -642,12 +736,11 @@ export default function App() {
     return '-apple-system, "SF Pro Display", sans-serif';
   };
 
-  // --- Re-seed ---
   const gen = () => {
     setCells((prev) => prev.map((c) => ({ ...c, ph: Math.random() * Math.PI * 2 })));
   };
 
-  // --- Image upload + build sampling canvas (single image for color sampling) ---
+  // --- Image upload (single for sampling/preview) ---
   const handleImageUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -762,15 +855,6 @@ export default function App() {
     return { x, y };
   };
 
-  // --- Speed mapping (manual vs BPM) ---
-  const getSpeedFactor = (baseSpeed) => {
-    if (s.speedMode !== "bpm") return baseSpeed;
-    const detected = bpmRef.current.smooth;
-    const bpm = detected ?? s.bpmTarget;
-    const factor = (bpm / 120) * s.bpmMultiply;
-    return baseSpeed * factor;
-  };
-
   // --- Palette helpers ---
   const palette = React.useMemo(() => {
     const arr = Array.isArray(s.colorSeq) ? s.colorSeq : [];
@@ -873,7 +957,7 @@ export default function App() {
     [imageSeqIndex]
   );
 
-  // --- Swiss grid cell geometry (supports variable edges) ---
+  // --- Swiss grid geometry (variable edges) ---
   const swissCellGeom = (r, c, w, h) => {
     const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
     const re = rowEdges || Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
@@ -893,10 +977,9 @@ export default function App() {
     };
   };
 
-  // --- SQUEEZE / STRING % renderer (clipped inside a rect) ---
+  // --- SQUEEZE renderer ---
   const drawSqueezeStringInRect = (ctx, rect, chs, st, inkColor) => {
     if (!chs || chs.length === 0) return;
-
     const { x, y, w, h } = rect;
 
     ctx.save();
@@ -906,7 +989,6 @@ export default function App() {
 
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-
     if (inkColor) ctx.fillStyle = inkColor;
 
     const sp = getSpeedFactor(s.squeezeSpd || 1);
@@ -917,10 +999,8 @@ export default function App() {
     const flow = getSpeedFactor(s.squeezeFlow || 1);
     const scroll = st * 160 * flow;
 
-    const sampleGlyph = chs[0];
-    const mw = ctx.measureText(sampleGlyph).width || 10;
+    const mw = ctx.measureText(chs[0]).width || 10;
     const spacing = Math.max(6, mw * (s.squeezeDensity ?? 1));
-
     const centerY = y + h / 2;
 
     const cx = x + w / 2;
@@ -931,7 +1011,6 @@ export default function App() {
 
     const left = x - w;
     const right = x + w * 2;
-
     const baseK = Math.floor(scroll / spacing);
 
     for (let px = left; px <= right; px += spacing) {
@@ -939,11 +1018,10 @@ export default function App() {
       const gi = ((k % chs.length) + chs.length) % chs.length;
       ctx.fillText(chs[gi], px, centerY);
     }
-
     ctx.restore();
   };
 
-  // --- Apply paint / draw ---
+  // --- Apply paint ---
   const applyPaintToIdx = (idx, cx, cy) => {
     if (idx == null) return;
     const useSeq = !!paint.useSeq;
@@ -970,7 +1048,6 @@ export default function App() {
     upsertCell(idx, { type: s.selEl, ph: Math.random() * Math.PI * 2 });
   };
 
-  // Clamp menu to viewport
   const openMenuAt = (clientX, clientY, idx) => {
     const pad = 12;
     const menuW = 220;
@@ -1058,7 +1135,7 @@ export default function App() {
 
     ctx.fillStyle = "#0A0A0A";
 
-    // --- patterns ---
+    // basic patterns
     if (s.pat === "vertical-lines") {
       const th = s.thick * (1 + bass * 0.5);
       for (let x = 0; x < w; x += s.space) {
@@ -1152,7 +1229,7 @@ export default function App() {
       return;
     }
 
-    // map painted/overlay cells
+    // build map of painted/overlay cells
     const cellByIdx = new Map();
     for (const c of cells) cellByIdx.set(c.idx, c);
 
@@ -1202,7 +1279,13 @@ export default function App() {
             ctx.restore();
           }
 
-          const inkOverride = resolveInkColor({ paintObj: entry?.paint, globalOn: s.colorSeqOn, st, r, c });
+          const inkOverride = resolveInkColor({
+            paintObj: entry?.paint,
+            globalOn: s.colorSeqOn,
+            st,
+            r,
+            c,
+          });
 
           if (s.strBehave === "squeeze" && chs.length > 0) {
             ctx.save();
@@ -1240,7 +1323,7 @@ export default function App() {
         }
       }
 
-      // SPAN TEXT (char grid)
+      // ✅ SPAN: fill cells (mask) or draw chopped text (optional)
       if (s.spanOn && s.spanText?.length) {
         const r0 = clamp(s.spanRow, 0, rows - 1);
         const c0 = clamp(s.spanCol, 0, cols - 1);
@@ -1255,27 +1338,44 @@ export default function App() {
         const rw = spanCols * s.space;
         const rh = spanRows * s.space;
 
-        ctx.save();
-        ctx.fillStyle = "#0A0A0A";
-        drawSpanTextChopped({
-          ctx,
-          text: s.spanText,
-          region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
-          getCellRect: (rr, cc) => ({
-            x: cc * s.space,
-            y: rr * s.space,
-            w: s.space,
-            h: s.space,
-          }),
-          fontFamily: getFontFamily(),
-          fontScale: s.spanFontScale,
-          tracking: s.spanTracking,
-          align: s.spanAlign || "left",
-        });
-        ctx.restore();
+        if (s.spanFillOn) {
+          fillCellsFromTextMask({
+            ctx,
+            text: s.spanText,
+            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
+            getCellRect: (rr, cc) => ({
+              x: cc * s.space,
+              y: rr * s.space,
+              w: s.space,
+              h: s.space,
+            }),
+            fontFamily: getFontFamily(),
+            fontScale: s.spanFontScale,
+            tracking: s.spanTracking,
+            align: s.spanAlign || "center",
+            fillColor: s.spanFillColor || "#000",
+            threshold: s.spanFillThreshold ?? 0.18,
+            maskScale: s.spanMaskScale ?? 2,
+          });
+        } else {
+          drawSpanTextChopped({
+            ctx,
+            text: s.spanText,
+            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
+            getCellRect: (rr, cc) => ({
+              x: cc * s.space,
+              y: rr * s.space,
+              w: s.space,
+              h: s.space,
+            }),
+            fontFamily: getFontFamily(),
+            fontScale: s.spanFontScale,
+            tracking: s.spanTracking,
+            align: s.spanAlign || "center",
+          });
+        }
       }
 
-      // Optional: show uploaded image faintly
       const showRef = (paint.mode === "sample" || s.imgPreviewOn) && imgRef.current;
       if (showRef) {
         const img = imgRef.current;
@@ -1294,8 +1394,7 @@ export default function App() {
 
     // --- SWISS GRID ---
     if (s.pat === "swiss-grid") {
-      // grid stroke (variable edges supported)
-      if (s.grid && !s.radialGridOn) {
+      if (s.grid) {
         ctx.strokeStyle = "#E5E5E5";
         ctx.lineWidth = 0.5;
 
@@ -1320,7 +1419,7 @@ export default function App() {
 
       const chs = s.chars.split("");
 
-      // 1) base layer letters (always on)
+      // base layer letters
       if (s.swissBaseOn && chs.length > 0) {
         for (let r = 0; r < s.rows; r++) {
           for (let c = 0; c < s.cols; c++) {
@@ -1402,7 +1501,7 @@ export default function App() {
         }
       }
 
-      // 2) SPAN TEXT (chopped) - works with variable edges
+      // ✅ SPAN: this is the part you asked for (fill cells, not overlay)
       if (s.spanOn && s.spanText?.length) {
         const r0 = clamp(s.spanRow, 0, s.rows - 1);
         const c0 = clamp(s.spanCol, 0, s.cols - 1);
@@ -1420,22 +1519,145 @@ export default function App() {
         const rw = g11.x + g11.w - g00.x;
         const rh = g11.y + g11.h - g00.y;
 
-        ctx.save();
-        ctx.fillStyle = "#0A0A0A";
-        drawSpanTextChopped({
-          ctx,
-          text: s.spanText,
-          region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
-          getCellRect: (rr, cc) => swissCellGeom(rr, cc, w, h),
-          fontFamily: getFontFamily(),
-          fontScale: s.spanFontScale,
-          tracking: s.spanTracking,
-          align: s.spanAlign || "left",
-        });
-        ctx.restore();
+        if (s.spanFillOn) {
+          fillCellsFromTextMask({
+            ctx,
+            text: s.spanText,
+            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
+            getCellRect: (rr, cc) => swissCellGeom(rr, cc, w, h),
+            fontFamily: getFontFamily(),
+            fontScale: s.spanFontScale,
+            tracking: s.spanTracking,
+            align: s.spanAlign || "center",
+            fillColor: s.spanFillColor || "#000",
+            threshold: s.spanFillThreshold ?? 0.18,
+            maskScale: s.spanMaskScale ?? 2,
+          });
+        } else {
+          drawSpanTextChopped({
+            ctx,
+            text: s.spanText,
+            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
+            getCellRect: (rr, cc) => swissCellGeom(rr, cc, w, h),
+            fontFamily: getFontFamily(),
+            fontScale: s.spanFontScale,
+            tracking: s.spanTracking,
+            align: s.spanAlign || "center",
+          });
+        }
       }
 
-      // Optional: show uploaded image faintly
+      // overlay objects drawn into selected cells (your original behavior)
+      const overlayEntries = cells.filter((c) => c.type && c.type !== "paint");
+      overlayEntries.forEach((cel, idx) => {
+        const col = cel.idx % s.cols;
+        const row = Math.floor(cel.idx / s.cols);
+        const g = swissCellGeom(row, col, w, h);
+
+        const st = ct + (row + col) * s.stagger;
+        const lt = ct + idx * s.stagger;
+        const ab = ease((bass + midi) * 0.5);
+
+        const fillCol = resolveFillColor({ paintObj: cel.paint, st, r: row, c: col });
+        const imgBg = resolveFillImageCanvas({
+          paintObj: cel.paint,
+          globalOn: s.imgSeqOn,
+          st,
+          r: row,
+          c: col,
+        });
+
+        if (imgBg) {
+          ctx.save();
+          ctx.globalAlpha = 1;
+          ctx.imageSmoothingEnabled = true;
+          drawCoverCanvas(ctx, imgBg, g.x, g.y, g.w, g.h);
+          ctx.restore();
+        }
+        if (fillCol && s.fillAs === "background") {
+          ctx.save();
+          ctx.fillStyle = fillCol;
+          ctx.globalAlpha = 0.9;
+          ctx.fillRect(g.x, g.y, g.w, g.h);
+          ctx.restore();
+        }
+
+        const inkOverride = resolveInkColor({
+          paintObj: cel.paint,
+          globalOn: s.colorSeqOn,
+          st,
+          r: row,
+          c: col,
+        });
+
+        ctx.save();
+        if (s.fillAs === "ink" && fillCol) ctx.fillStyle = fillCol;
+        else if (inkOverride) ctx.fillStyle = inkOverride;
+
+        ctx.translate(g.cx, g.cy);
+        const gr = (s.rot + aud * 45) * (Math.PI / 180);
+        if (gr !== 0) ctx.rotate(gr);
+
+        if (s.behave === "string-wave") {
+          const waveFreq = 2 + idx * 0.1;
+          const waveAmp = Math.min(g.w, g.h) * 0.15 * (1 + ab * 0.5);
+          const phase1 = Math.sin(lt * waveFreq + cel.ph);
+          const phase2 = Math.cos(lt * (waveFreq * 1.5) + cel.ph + 1);
+          const damping = 0.7 + ab * 0.3;
+          ctx.translate(phase1 * waveAmp * damping, phase2 * waveAmp * damping);
+        } else if (s.behave === "string-pendulum") {
+          const swingAngle = Math.sin(lt * 1.5 + cel.ph) * (0.5 + ab * 0.5);
+          ctx.rotate(swingAngle);
+        } else if (s.behave === "string-elastic") {
+          const bounce = Math.sin(lt * 4 + cel.ph);
+          const elasticity = 1 + bounce * (0.3 + ab * 0.4);
+          const squash = 1 / Math.sqrt(elasticity);
+          ctx.scale(squash, elasticity);
+        }
+
+        const sz = Math.min(g.w, g.h) * 0.5 * s.swissCharScale;
+
+        if (cel.type === "char") {
+          const chs2 = s.chars.split("");
+          if (chs2.length > 0) {
+            ctx.font = `${sz * 1.2}px ${getFontFamily()}`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            if (s.cycle === "crossfade") {
+              const cf = (lt * 2) % chs2.length;
+              const ci = Math.floor(cf);
+              const ni = (ci + 1) % chs2.length;
+              const pr = cf - ci;
+              const ep = ease(pr);
+              ctx.globalAlpha = 1 - ep;
+              ctx.fillText(chs2[ci], 0, 0);
+              ctx.globalAlpha = ep;
+              ctx.fillText(chs2[ni], 0, 0);
+              ctx.globalAlpha = 1;
+            } else {
+              ctx.fillText(chs2[Math.floor(lt * 2) % chs2.length], 0, 0);
+            }
+          }
+        } else if (cel.type === "dot") {
+          ctx.beginPath();
+          ctx.arc(0, 0, sz * 0.4 * (1 + ab * 0.4), 0, Math.PI * 2);
+          ctx.fill();
+        } else if (cel.type === "square") {
+          const ss = sz * 0.8 * (1 + ab * 0.4);
+          ctx.fillRect(-ss / 2, -ss / 2, ss, ss);
+        } else if (cel.type === "svg" && svgPath) {
+          const scale = sz / Math.max(svgPath.width, svgPath.height);
+          ctx.save();
+          ctx.scale(scale, scale);
+          ctx.translate(-svgPath.width / 2, -svgPath.height / 2);
+          const path = new Path2D(svgPath.path);
+          ctx.fill(path);
+          ctx.restore();
+        }
+
+        ctx.restore();
+      });
+
       const showRef = (paint.mode === "sample" || s.imgPreviewOn) && imgRef.current;
       if (showRef) {
         const img = imgRef.current;
@@ -1490,7 +1712,10 @@ export default function App() {
   React.useEffect(() => {
     if (!s.googleFont) return;
     const link = document.createElement("link");
-    link.href = `https://fonts.googleapis.com/css2?family=${s.googleFont.replace(/ /g, "+")}:wght@400;600;700&display=swap`;
+    link.href = `https://fonts.googleapis.com/css2?family=${s.googleFont.replace(
+      / /g,
+      "+"
+    )}:wght@400;600;700&display=swap`;
     link.rel = "stylesheet";
     document.head.appendChild(link);
     return () => document.head.removeChild(link);
@@ -1610,6 +1835,7 @@ export default function App() {
                 </div>
                 <div className="text-[10px] text-neutral-500">(needs audio)</div>
               </div>
+
               <label className="block text-xs font-semibold uppercase tracking-wider">
                 Fallback BPM: {s.bpmTarget}
               </label>
@@ -1621,6 +1847,7 @@ export default function App() {
                 onChange={(e) => setS((p) => ({ ...p, bpmTarget: parseInt(e.target.value) }))}
                 className="w-full"
               />
+
               <label className="block text-xs font-semibold uppercase tracking-wider">
                 Multiplier: {s.bpmMultiply.toFixed(2)}×
               </label>
@@ -1633,14 +1860,11 @@ export default function App() {
                 onChange={(e) => setS((p) => ({ ...p, bpmMultiply: parseFloat(e.target.value) }))}
                 className="w-full"
               />
-              <div className="text-xs text-neutral-600">
-                Affects Char Speed + Distortion Speed + Squeeze Flow.
-              </div>
             </div>
           )}
         </div>
 
-        {/* Audio (unchanged UI) */}
+        {/* Audio */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold uppercase tracking-wider">Audio</label>
@@ -1656,7 +1880,6 @@ export default function App() {
             value={audioMode}
             onChange={(e) => setAudioMode(e.target.value)}
             className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-            title="Audio source"
           >
             <option value="mic">Microphone</option>
             <option value="file">Audio File</option>
@@ -1679,9 +1902,7 @@ export default function App() {
           {audioMode === "file" && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <div className="text-xs text-neutral-700">
-                  {audioFileName ? audioFileName : "No file selected"}
-                </div>
+                <div className="text-xs text-neutral-700">{audioFileName || "No file selected"}</div>
                 <button
                   onClick={async () => {
                     const el = audioElRef.current;
@@ -1702,7 +1923,6 @@ export default function App() {
                     audioFileUrl ? "bg-black text-white" : "bg-neutral-200 text-neutral-500"
                   }`}
                   disabled={!audioFileUrl}
-                  title="Play/pause file"
                 >
                   {audioFilePlaying ? "Pause" : "Play"}
                 </button>
@@ -1721,7 +1941,6 @@ export default function App() {
                   setAudioFileName(f.name);
                 }}
               />
-              <div className="text-[11px] text-neutral-600">Tip: file mode is easier on mobile.</div>
             </div>
           )}
 
@@ -1731,13 +1950,16 @@ export default function App() {
                 <div className="h-full bg-black transition-all" style={{ width: `${audioLvl * 100}%` }} />
               </div>
               <div className="h-1 bg-neutral-200 rounded-full">
-                <div className="h-full bg-neutral-600 transition-all" style={{ width: `${bassLvl * 100}%` }} />
+                <div
+                  className="h-full bg-neutral-600 transition-all"
+                  style={{ width: `${bassLvl * 100}%` }}
+                />
               </div>
             </div>
           )}
         </div>
 
-        {/* MIDI (unchanged UI) */}
+        {/* MIDI */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold uppercase tracking-wider">MIDI</label>
@@ -1748,12 +1970,10 @@ export default function App() {
               {midiOn ? <Play size={14} fill="white" /> : <Square size={14} />}
             </button>
           </div>
-          {midiOn && midiDevs.length > 0 && (
-            <div className="text-xs text-neutral-600">{midiDevs.length} device(s)</div>
-          )}
+          {midiOn && midiDevs.length > 0 && <div className="text-xs text-neutral-600">{midiDevs.length} device(s)</div>}
         </div>
 
-        {/* Distortion (unchanged UI) */}
+        {/* Distortion */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold uppercase tracking-wider">Distortion</label>
@@ -1776,33 +1996,29 @@ export default function App() {
                 <option value="ripple">Ripple Waves</option>
                 <option value="swirl">Swirl Vortex</option>
               </select>
-              <div className="space-y-2">
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Strength: {s.distStr}
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="200"
-                  value={s.distStr}
-                  onChange={(e) => setS((p) => ({ ...p, distStr: parseInt(e.target.value) }))}
-                  className="w-full"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Speed: {s.distSpd}×
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="10"
-                  step="0.1"
-                  value={s.distSpd}
-                  onChange={(e) => setS((p) => ({ ...p, distSpd: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
-              </div>
+              <label className="block text-xs font-semibold uppercase tracking-wider">
+                Strength: {s.distStr}
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="200"
+                value={s.distStr}
+                onChange={(e) => setS((p) => ({ ...p, distStr: parseInt(e.target.value) }))}
+                className="w-full"
+              />
+              <label className="block text-xs font-semibold uppercase tracking-wider">
+                Speed: {s.distSpd}×
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="0.1"
+                value={s.distSpd}
+                onChange={(e) => setS((p) => ({ ...p, distSpd: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
             </>
           )}
         </div>
@@ -1842,11 +2058,269 @@ export default function App() {
           </div>
         )}
 
-        {/* SPAN TEXT controls (works on swiss + char grid) */}
+        {/* Paint + Image */}
+        {interactive && (
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Cell Color / Image</label>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPaint((p) => ({ ...p, mode: p.mode === "color" ? "none" : "color" }))}
+                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 min-h-[44px] ${
+                  paint.mode === "color" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
+                }`}
+              >
+                <Wand2 size={14} />
+                Paint
+              </button>
+              <button
+                onClick={() =>
+                  setPaint((p) => ({
+                    ...p,
+                    mode: p.mode === "sample" ? "none" : "sample",
+                    useSeq: false,
+                  }))
+                }
+                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 min-h-[44px] ${
+                  paint.mode === "sample" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
+                }`}
+                disabled={!imageInfo.loaded}
+              >
+                <ImageIcon size={14} />
+                Sample
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <input
+                type="color"
+                value={paint.color}
+                onChange={(e) => setPaint((p) => ({ ...p, color: e.target.value, useSeq: false }))}
+                className="h-10 w-14 rounded-md border border-neutral-300 bg-white"
+              />
+              <div className="flex-1">
+                <div className="text-xs text-neutral-600">Paint</div>
+                <div className="font-mono text-xs">{paint.useSeq ? "(color string)" : paint.color}</div>
+              </div>
+              <select
+                value={s.fillAs}
+                onChange={(e) => setS((p) => ({ ...p, fillAs: e.target.value }))}
+                className="px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+              >
+                <option value="background">Background</option>
+                <option value="ink">Ink</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => setPaint((p) => ({ ...p, useSeq: !p.useSeq, mode: "color" }))}
+              className={`w-full px-3 py-2 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 min-h-[44px] ${
+                paint.useSeq ? "bg-black text-white border-black" : "bg-white border-neutral-300"
+              }`}
+            >
+              <Palette size={14} />
+              Paint with Color String
+            </button>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-neutral-700 font-medium flex items-center gap-2">
+                  <ImageIcon size={14} /> Upload image
+                </div>
+                {imageInfo.loaded && <div className="text-[10px] text-green-700">✓ {imageInfo.name}</div>}
+              </div>
+              <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs" />
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold uppercase tracking-wider">Image Preview</label>
+                  <button
+                    onClick={() => setS((p) => ({ ...p, imgPreviewOn: !p.imgPreviewOn }))}
+                    className={`p-1.5 rounded ${s.imgPreviewOn ? "bg-black text-white" : "bg-neutral-200"}`}
+                  >
+                    {s.imgPreviewOn ? <Play size={14} fill="white" /> : <Square size={14} />}
+                  </button>
+                </div>
+                <label className="block text-xs font-semibold uppercase tracking-wider">
+                  Opacity: {Math.round((s.imgPreviewAlpha ?? 0.15) * 100)}%
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.6"
+                  step="0.01"
+                  value={s.imgPreviewAlpha ?? 0.15}
+                  onChange={(e) => setS((p) => ({ ...p, imgPreviewAlpha: parseFloat(e.target.value) }))}
+                  className="w-full"
+                />
+              </div>
+            </div>
+
+            {/* Image String */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold uppercase tracking-wider flex items-center gap-2">
+                  <ImageIcon size={14} /> Image String
+                </label>
+                <button
+                  onClick={() => setS((p) => ({ ...p, imgSeqOn: !p.imgSeqOn }))}
+                  className={`p-1.5 rounded ${s.imgSeqOn ? "bg-black text-white" : "bg-neutral-200"}`}
+                  disabled={imageSeqReadyCount === 0}
+                >
+                  {s.imgSeqOn ? <Play size={14} fill="white" /> : <Square size={14} />}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-5 gap-2">
+                {imgSeqInfo.map((slot, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="h-9 w-full rounded-md border border-neutral-300 bg-white flex items-center justify-center">
+                      <span className={`text-[10px] ${slot.loaded ? "text-green-700" : "text-neutral-500"}`}>
+                        {slot.loaded ? "✓" : i + 1}
+                      </span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleImageSeqUpload(i, e.target.files?.[0])}
+                      className="w-full text-[10px]"
+                    />
+                    {slot.loaded && (
+                      <button
+                        onClick={() => clearImageSeqSlot(i)}
+                        className="w-full text-[10px] text-red-600 hover:underline"
+                      >
+                        remove
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <div className="text-xs text-neutral-600">Behavior</div>
+                  <select
+                    value={s.imgSeqBehave}
+                    onChange={(e) => setS((p) => ({ ...p, imgSeqBehave: e.target.value }))}
+                    className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+                  >
+                    <option value="same">Same as letters</option>
+                    <option value="cycle">Cycle</option>
+                    <option value="wave">Wave</option>
+                    <option value="random">Random</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-neutral-600">Speed</div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="4"
+                    step="0.05"
+                    value={s.imgSeqSpeed}
+                    onChange={(e) => setS((p) => ({ ...p, imgSeqSpeed: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={() =>
+                  setPaint((p) => ({ ...p, mode: p.mode === "imgseq" ? "none" : "imgseq", useSeq: false }))
+                }
+                className={`w-full px-3 py-2 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 min-h-[44px] ${
+                  paint.mode === "imgseq" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
+                }`}
+                disabled={imageSeqReadyCount === 0}
+              >
+                <ImageIcon size={14} /> Paint with Image String
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* String behavior */}
+        {interactive && (
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">String Behavior</label>
+            <select
+              value={s.strBehave}
+              onChange={(e) => setS((p) => ({ ...p, strBehave: e.target.value }))}
+              className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"
+            >
+              <option value="cycle">Cycle</option>
+              <option value="wave">Wave</option>
+              <option value="random">Random</option>
+              <option value="squeeze">Squeeze (String %)</option>
+            </select>
+
+            {s.strBehave === "squeeze" && (
+              <>
+                <label className="block text-xs font-semibold uppercase tracking-wider">
+                  Squeeze Amount: {s.squeezeAmt.toFixed(2)}
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.98"
+                  step="0.01"
+                  value={s.squeezeAmt}
+                  onChange={(e) => setS((p) => ({ ...p, squeezeAmt: parseFloat(e.target.value) }))}
+                  className="w-full"
+                />
+                <label className="block text-xs font-semibold uppercase tracking-wider">
+                  Squeeze Speed: {s.squeezeSpd.toFixed(2)}
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="6"
+                  step="0.05"
+                  value={s.squeezeSpd}
+                  onChange={(e) => setS((p) => ({ ...p, squeezeSpd: parseFloat(e.target.value) }))}
+                  className="w-full"
+                />
+                <label className="block text-xs font-semibold uppercase tracking-wider">
+                  Flow Speed: {s.squeezeFlow.toFixed(2)}
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="6"
+                  step="0.05"
+                  value={s.squeezeFlow}
+                  onChange={(e) => setS((p) => ({ ...p, squeezeFlow: parseFloat(e.target.value) }))}
+                  className="w-full"
+                />
+                <label className="block text-xs font-semibold uppercase tracking-wider">
+                  Density: {s.squeezeDensity.toFixed(2)}
+                </label>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2"
+                  step="0.01"
+                  value={s.squeezeDensity}
+                  onChange={(e) => setS((p) => ({ ...p, squeezeDensity: parseFloat(e.target.value) }))}
+                  className="w-full"
+                />
+              </>
+            )}
+
+            <label className="block text-xs font-semibold uppercase tracking-wider">Characters</label>
+            <input
+              type="text"
+              value={s.chars}
+              onChange={(e) => setS((p) => ({ ...p, chars: e.target.value }))}
+              className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono"
+            />
+          </div>
+        )}
+
+        {/* ✅ Span Text UI (mask fill mode) */}
         {interactive && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold uppercase tracking-wider">Span Text (Chopped)</label>
+              <label className="text-xs font-semibold uppercase tracking-wider">Span Text</label>
               <button
                 onClick={() => setS((p) => ({ ...p, spanOn: !p.spanOn }))}
                 className={`p-1.5 rounded ${s.spanOn ? "bg-black text-white" : "bg-neutral-200"}`}
@@ -1863,6 +2337,7 @@ export default function App() {
                   onChange={(e) => setS((p) => ({ ...p, spanText: e.target.value }))}
                   className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono"
                 />
+
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <div className="text-xs text-neutral-600">Row</div>
@@ -1909,16 +2384,29 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <div className="text-xs text-neutral-600">Align</div>
-                  <select
-                    value={s.spanAlign}
-                    onChange={(e) => setS((p) => ({ ...p, spanAlign: e.target.value }))}
-                    className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                  >
-                    <option value="left">Left</option>
-                    <option value="center">Center</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-xs text-neutral-600">Align</div>
+                    <select
+                      value={s.spanAlign}
+                      onChange={(e) => setS((p) => ({ ...p, spanAlign: e.target.value }))}
+                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+                    >
+                      <option value="left">Left</option>
+                      <option value="center">Center</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="text-xs text-neutral-600">Mode</div>
+                    <select
+                      value={s.spanFillOn ? "fill" : "draw"}
+                      onChange={(e) => setS((p) => ({ ...p, spanFillOn: e.target.value === "fill" }))}
+                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+                    >
+                      <option value="fill">Fill cells</option>
+                      <option value="draw">Draw text</option>
+                    </select>
+                  </div>
                 </div>
 
                 <label className="block text-xs font-semibold uppercase tracking-wider">
@@ -1946,6 +2434,42 @@ export default function App() {
                   onChange={(e) => setS((p) => ({ ...p, spanTracking: parseInt(e.target.value) }))}
                   className="w-full"
                 />
+
+                {s.spanFillOn && (
+                  <div className="rounded-lg border border-neutral-200 bg-white p-3 space-y-2">
+                    <label className="block text-xs font-semibold uppercase tracking-wider">Fill Color</label>
+                    <input
+                      type="color"
+                      value={s.spanFillColor}
+                      onChange={(e) => setS((p) => ({ ...p, spanFillColor: e.target.value }))}
+                      className="h-10 w-full rounded-md border border-neutral-300 bg-white"
+                    />
+                    <label className="block text-xs font-semibold uppercase tracking-wider">
+                      Coverage Threshold: {(s.spanFillThreshold ?? 0.18).toFixed(2)}
+                    </label>
+                    <input
+                      type="range"
+                      min="0.02"
+                      max="0.6"
+                      step="0.01"
+                      value={s.spanFillThreshold ?? 0.18}
+                      onChange={(e) => setS((p) => ({ ...p, spanFillThreshold: parseFloat(e.target.value) }))}
+                      className="w-full"
+                    />
+                    <label className="block text-xs font-semibold uppercase tracking-wider">
+                      Mask Quality: {s.spanMaskScale ?? 2}×
+                    </label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="4"
+                      step="1"
+                      value={s.spanMaskScale ?? 2}
+                      onChange={(e) => setS((p) => ({ ...p, spanMaskScale: parseInt(e.target.value) }))}
+                      className="w-full"
+                    />
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1976,37 +2500,24 @@ export default function App() {
               />
             </div>
 
-            {/* ✅ Variable Grid Density UI (THIS is the sliders you asked for) */}
+            {/* Variable Density UI */}
             <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">
-                Variable Grid Density
-              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wider">Variable Grid Density</label>
 
-              {/* Columns (move vertical lines left/right) */}
               <div className="rounded-lg border border-neutral-200 bg-white p-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold uppercase tracking-wider">
-                    Columns (vertical lines)
-                  </div>
+                  <div className="text-xs font-semibold uppercase tracking-wider">Columns (vertical)</div>
                   <button
-                    onClick={() =>
-                      setS((p) => ({
-                        ...p,
-                        varColsOn: !p.varColsOn,
-                        radialGridOn: !p.varColsOn ? false : p.radialGridOn,
-                      }))
-                    }
+                    onClick={() => setS((p) => ({ ...p, varColsOn: !p.varColsOn }))}
                     className={`p-1.5 rounded ${s.varColsOn ? "bg-black text-white" : "bg-neutral-200"}`}
-                    title="Enable variable column widths"
                   >
                     {s.varColsOn ? <Play size={14} fill="white" /> : <Square size={14} />}
                   </button>
                 </div>
-
                 {s.varColsOn && (
                   <>
                     <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Focus X (move dense band): {s.colFocus.toFixed(2)}
+                      Focus X: {s.colFocus.toFixed(2)}
                     </label>
                     <input
                       type="range"
@@ -2017,9 +2528,8 @@ export default function App() {
                       onChange={(e) => setS((p) => ({ ...p, colFocus: parseFloat(e.target.value) }))}
                       className="w-full"
                     />
-
                     <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Strength (density): {s.colStrength.toFixed(1)}
+                      Strength: {s.colStrength.toFixed(1)}
                     </label>
                     <input
                       type="range"
@@ -2030,7 +2540,6 @@ export default function App() {
                       onChange={(e) => setS((p) => ({ ...p, colStrength: parseFloat(e.target.value) }))}
                       className="w-full"
                     />
-
                     <label className="block text-xs font-semibold uppercase tracking-wider">
                       Band Width: {s.colSigma.toFixed(2)}
                     </label>
@@ -2047,31 +2556,20 @@ export default function App() {
                 )}
               </div>
 
-              {/* Rows (move horizontal lines up/down) */}
               <div className="rounded-lg border border-neutral-200 bg-white p-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold uppercase tracking-wider">
-                    Rows (horizontal lines)
-                  </div>
+                  <div className="text-xs font-semibold uppercase tracking-wider">Rows (horizontal)</div>
                   <button
-                    onClick={() =>
-                      setS((p) => ({
-                        ...p,
-                        varRowsOn: !p.varRowsOn,
-                        radialGridOn: !p.varRowsOn ? false : p.radialGridOn,
-                      }))
-                    }
+                    onClick={() => setS((p) => ({ ...p, varRowsOn: !p.varRowsOn }))}
                     className={`p-1.5 rounded ${s.varRowsOn ? "bg-black text-white" : "bg-neutral-200"}`}
-                    title="Enable variable row heights"
                   >
                     {s.varRowsOn ? <Play size={14} fill="white" /> : <Square size={14} />}
                   </button>
                 </div>
-
                 {s.varRowsOn && (
                   <>
                     <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Focus Y (move dense band): {s.rowFocus.toFixed(2)}
+                      Focus Y: {s.rowFocus.toFixed(2)}
                     </label>
                     <input
                       type="range"
@@ -2082,9 +2580,8 @@ export default function App() {
                       onChange={(e) => setS((p) => ({ ...p, rowFocus: parseFloat(e.target.value) }))}
                       className="w-full"
                     />
-
                     <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Strength (density): {s.rowStrength.toFixed(1)}
+                      Strength: {s.rowStrength.toFixed(1)}
                     </label>
                     <input
                       type="range"
@@ -2095,7 +2592,6 @@ export default function App() {
                       onChange={(e) => setS((p) => ({ ...p, rowStrength: parseFloat(e.target.value) }))}
                       className="w-full"
                     />
-
                     <label className="block text-xs font-semibold uppercase tracking-wider">
                       Band Width: {s.rowSigma.toFixed(2)}
                     </label>
@@ -2111,35 +2607,54 @@ export default function App() {
                   </>
                 )}
               </div>
-
-              {varEdgesOn && (
-                <div className="text-[11px] text-neutral-500">
-                  Tip: if you want “just move one line”, reduce Band Width (Sigma) and lower Strength.
-                </div>
-              )}
             </div>
 
-            {/* Radial grid note (kept, but you can remove if not needed) */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold uppercase tracking-wider">Radial Density Grid</label>
-                <button
-                  onClick={() => setS((p) => ({ ...p, radialGridOn: !p.radialGridOn }))}
-                  className={`p-1.5 rounded ${s.radialGridOn ? "bg-black text-white" : "bg-neutral-200"}`}
-                  disabled={varEdgesOn}
-                  title={varEdgesOn ? "Turn off Variable Columns/Rows to use radial grid." : ""}
-                >
-                  {s.radialGridOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-                </button>
-              </div>
-              {varEdgesOn && (
-                <div className="text-[11px] text-neutral-500">
-                  Radial grid is disabled when Variable Columns/Rows is on.
-                </div>
-              )}
+              <label className="block text-xs font-semibold uppercase tracking-wider">Draw Element</label>
+              <select
+                value={s.selEl}
+                onChange={(e) => setS((p) => ({ ...p, selEl: e.target.value }))}
+                className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"
+              >
+                <option value="char">Character</option>
+                <option value="dot">Dot</option>
+                <option value="square">Square</option>
+                <option value="svg">SVG</option>
+              </select>
             </div>
 
-            {/* Minimal swiss options you already had (kept) */}
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold uppercase tracking-wider">Draw Mode</label>
+              <button
+                onClick={() => setS((p) => ({ ...p, draw: !p.draw }))}
+                className={`p-1.5 rounded ${s.draw ? "bg-black text-white" : "bg-neutral-200"}`}
+              >
+                {s.draw ? <Play size={14} fill="white" /> : <Square size={14} />}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setCells([])}
+              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black min-h-[44px]"
+            >
+              Clear
+            </button>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold uppercase tracking-wider">Behavior</label>
+              <select
+                value={s.behave}
+                onChange={(e) => setS((p) => ({ ...p, behave: e.target.value }))}
+                className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"
+              >
+                <optgroup label="String Physics">
+                  <option value="string-wave">String Wave</option>
+                  <option value="string-pendulum">String Pendulum</option>
+                  <option value="string-elastic">String Elastic</option>
+                </optgroup>
+              </select>
+            </div>
+
             <div className="space-y-2">
               <label className="block text-xs font-semibold uppercase tracking-wider">Google Font</label>
               <select
@@ -2157,12 +2672,7 @@ export default function App() {
 
             <div className="space-y-2">
               <label className="block text-xs font-semibold uppercase tracking-wider">Custom Font (.ttf/.otf)</label>
-              <input
-                type="file"
-                accept=".ttf,.otf,.woff,.woff2"
-                onChange={handleFontUpload}
-                className="w-full text-xs"
-              />
+              <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} className="w-full text-xs" />
               {s.customFont && <div className="text-xs text-green-600">✓ Custom font loaded</div>}
             </div>
 
@@ -2174,11 +2684,61 @@ export default function App() {
           </>
         )}
 
+        {/* Char-grid controls */}
+        {s.pat === "char-grid" && (
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider">Char Size: {s.charSz}px</label>
+            <input
+              type="range"
+              min="8"
+              max="80"
+              value={s.charSz}
+              onChange={(e) => setS((p) => ({ ...p, charSz: parseInt(e.target.value) }))}
+              className="w-full"
+            />
+            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
+            <input
+              type="range"
+              min="10"
+              max="200"
+              value={s.space}
+              onChange={(e) => setS((p) => ({ ...p, space: parseInt(e.target.value) }))}
+              className="w-full"
+            />
+            <label className="block text-xs font-semibold uppercase tracking-wider">
+              Speed: {s.charSpd.toFixed(2)}×
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="10"
+              step="0.1"
+              value={s.charSpd}
+              onChange={(e) => setS((p) => ({ ...p, charSpd: parseFloat(e.target.value) }))}
+              className="w-full"
+            />
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold uppercase tracking-wider">Draw Mode</label>
+              <button
+                onClick={() => setS((p) => ({ ...p, draw: !p.draw }))}
+                className={`p-1.5 rounded ${s.draw ? "bg-black text-white" : "bg-neutral-200"}`}
+              >
+                {s.draw ? <Play size={14} fill="white" /> : <Square size={14} />}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setCells([])}
+              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black min-h-[44px]"
+            >
+              Clear Painted Cells
+            </button>
+          </div>
+        )}
+
         {/* Global sensitivity */}
         <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wider">
-            Audio Sensitivity: {s.audioSens}
-          </label>
+          <label className="block text-xs font-semibold uppercase tracking-wider">Audio Sensitivity: {s.audioSens}</label>
           <input
             type="range"
             min="0"
@@ -2190,9 +2750,7 @@ export default function App() {
           />
         </div>
         <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wider">
-            MIDI Sensitivity: {s.midiSens}
-          </label>
+          <label className="block text-xs font-semibold uppercase tracking-wider">MIDI Sensitivity: {s.midiSens}</label>
           <input
             type="range"
             min="0"
@@ -2231,14 +2789,21 @@ export default function App() {
             style={{ left: menu.x, top: menu.y }}
             onClick={(e) => e.stopPropagation()}
           >
-            <button
-              onClick={() => {
-                // If you want these back, restore your "add" logic + overlays.
-                setMenu(null);
-              }}
-              className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm"
-            >
-              (Menu disabled in this trimmed build)
+            <button onClick={() => add("char")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add Char
+            </button>
+            <button onClick={() => add("dot")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add Dot
+            </button>
+            <button onClick={() => add("square")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add Square
+            </button>
+            <button onClick={() => add("svg")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
+              Add SVG
+            </button>
+            <div className="border-t my-1"></div>
+            <button onClick={rem} className="block w-full px-4 py-2 text-left hover:bg-red-50 text-sm text-red-600">
+              Remove
             </button>
           </div>
         )}
