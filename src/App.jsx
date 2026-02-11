@@ -12,7 +12,9 @@ import {
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 
+// --- BPM detection (autocorrelation over time-domain) ---
 function detectBpmFromFloatBuffer(floatBuf, sampleRate, minBpm = 60, maxBpm = 200) {
+  // Remove DC
   let mean = 0;
   for (let i = 0; i < floatBuf.length; i++) mean += floatBuf[i];
   mean /= floatBuf.length;
@@ -20,6 +22,7 @@ function detectBpmFromFloatBuffer(floatBuf, sampleRate, minBpm = 60, maxBpm = 20
   const buf = new Float32Array(floatBuf.length);
   for (let i = 0; i < floatBuf.length; i++) buf[i] = floatBuf[i] - mean;
 
+  // Energy gate (avoid false positives in silence)
   let energy = 0;
   for (let i = 0; i < buf.length; i++) energy += buf[i] * buf[i];
   energy /= buf.length;
@@ -61,229 +64,59 @@ function isHexColor(s) {
   return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s);
 }
 
-// ---------------- Variable grid helpers (for densify region) ----------------
-const gaussian = (x, sigma) => {
-  const s2 = (sigma * sigma) || 1e-6;
-  return Math.exp(-(x * x) / (2 * s2));
-};
-
-function buildVariableEdges(count, focus, strength, sigma) {
-  const n = Math.max(1, count);
-  const f = clamp(focus ?? 0.5, 0, 1);
-  const st = Math.max(0, strength ?? 0);
-  const sg = clamp(sigma ?? 0.18, 0.03, 0.6);
-
-  const w = new Array(n);
-  let sum = 0;
-  for (let i = 0; i < n; i++) {
-    const u = (i + 0.5) / n;
-    const g = gaussian(u - f, sg);
-    const wi = 1 / (1 + st * g); // smaller => denser
-    w[i] = wi;
-    sum += wi;
-  }
-  if (sum <= 0) return Array.from({ length: n + 1 }, (_, i) => i / n);
-
-  const edges = new Array(n + 1);
+// ---- non-uniform grid edges (density warp) ----
+// Produces edges [0..size] length count+1
+function buildWarpedEdges(count, size, on, center = 0.5, strength = 2, width = 0.25) {
+  const n = Math.max(1, count | 0);
+  const edges = new Float32Array(n + 1);
   edges[0] = 0;
+  if (!on || n === 1) {
+    for (let i = 1; i <= n; i++) edges[i] = (i / n) * size;
+    return edges;
+  }
+
+  const c = clamp(center, 0, 1);
+  const k = Math.max(0, strength);
+  const sig = Math.max(0.03, Math.min(0.75, width)); // avoid 0
+  // We want denser near center => smaller cells near center
+  // weight(u) bigger near center, then cellWidth ~ 1/weight
+  const invWidths = new Float32Array(n);
+  let sum = 0;
+
+  for (let i = 0; i < n; i++) {
+    const mid = (i + 0.5) / n;
+    const d = (mid - c) / sig;
+    const bump = Math.exp(-0.5 * d * d); // 0..1
+    const weight = 1 + k * bump; // 1..1+k
+    const inv = 1 / weight; // smaller near center
+    invWidths[i] = inv;
+    sum += inv;
+  }
+
   let acc = 0;
   for (let i = 0; i < n; i++) {
-    acc += w[i] / sum;
-    edges[i + 1] = acc;
+    acc += invWidths[i] / sum;
+    edges[i + 1] = acc * size;
   }
-  edges[n] = 1;
+  edges[n] = size; // snap
   return edges;
 }
 
-function findIndexFromEdges(edges, v01) {
-  const v = clamp(v01, 0, 1);
-  let lo = 0;
-  let hi = edges.length - 2;
+function findBin(edges, v) {
+  // edges: Float32Array length n+1
+  const n = edges.length - 1;
+  if (v < edges[0] || v > edges[n]) return null;
+  // binary search
+  let lo = 0, hi = n - 1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (v < edges[mid]) hi = mid - 1;
-    else if (v >= edges[mid + 1]) lo = mid + 1;
+    const a = edges[mid];
+    const b = edges[mid + 1];
+    if (v < a) hi = mid - 1;
+    else if (v >= b) lo = mid + 1;
     else return mid;
   }
-  return clamp(lo, 0, edges.length - 2);
-}
-
-// ---------------- Span: old “draw on top” mode (kept as option) -------------
-function drawSpanTextChopped({
-  ctx,
-  text,
-  region, // {x,y,w,h,r0,c0,rN,cN}
-  getCellRect,
-  fontFamily,
-  fontScale,
-  tracking,
-  align,
-}) {
-  if (!text) return;
-  const { x, y, w, h, r0, c0, rN, cN } = region;
-
-  const fontPx = Math.max(8, Math.min(h, w) * 0.75 * (fontScale || 1));
-  ctx.save();
-  ctx.font = `700 ${fontPx}px ${fontFamily}`;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-
-  const padX = Math.max(6, w * 0.06);
-  const tx = align === "center" ? x + w * 0.5 : x + padX;
-  const ty = y + h * 0.5;
-
-  const drawText = (x0, y0) => {
-    if (!tracking) {
-      if (align === "center") {
-        ctx.textAlign = "center";
-        ctx.fillText(text, x0, y0);
-        ctx.textAlign = "left";
-      } else {
-        ctx.fillText(text, x0, y0);
-      }
-      return;
-    }
-
-    let x = x0;
-    if (align === "center") {
-      let width = 0;
-      for (const ch of text) width += ctx.measureText(ch).width + tracking;
-      width -= tracking;
-      x = x0 - width / 2;
-    }
-    for (const ch of text) {
-      ctx.fillText(ch, x, y0);
-      x += ctx.measureText(ch).width + tracking;
-    }
-  };
-
-  for (let rr = r0; rr < rN; rr++) {
-    for (let cc = c0; cc < cN; cc++) {
-      const cell = getCellRect(rr, cc);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(cell.x, cell.y, cell.w, cell.h);
-      ctx.clip();
-      drawText(tx, ty);
-      ctx.restore();
-    }
-  }
-  ctx.restore();
-}
-
-// ---------------- Span: NEW “fill cells from text mask” mode ----------------
-function fillCellsFromTextMask({
-  ctx,
-  text,
-  region, // {x,y,w,h,r0,c0,rN,cN}
-  getCellRect,
-  fontFamily,
-  fontScale,
-  tracking,
-  align,
-  fillColor,
-  threshold = 0.18,
-  maskScale = 2,
-}) {
-  if (!text) return;
-
-  const { x, y, w, h, r0, c0, rN, cN } = region;
-  const sc = clamp(maskScale ?? 2, 1, 4);
-
-  const mw = Math.max(1, Math.floor(w * sc));
-  const mh = Math.max(1, Math.floor(h * sc));
-  const m = document.createElement("canvas");
-  m.width = mw;
-  m.height = mh;
-  const mctx = m.getContext("2d", { willReadFrequently: true });
-
-  mctx.clearRect(0, 0, mw, mh);
-
-  const fontPx = Math.max(8, Math.min(h, w) * 0.75 * (fontScale || 1));
-  mctx.font = `700 ${fontPx * sc}px ${fontFamily}`;
-  mctx.textBaseline = "middle";
-  mctx.textAlign = "left";
-
-  const padX = Math.max(6, w * 0.06);
-  const tx = align === "center" ? w * 0.5 : padX;
-  const ty = h * 0.5;
-
-  const drawText = (x0, y0) => {
-    if (!tracking) {
-      if (align === "center") {
-        mctx.textAlign = "center";
-        mctx.fillText(text, x0 * sc, y0 * sc);
-        mctx.textAlign = "left";
-      } else {
-        mctx.fillText(text, x0 * sc, y0 * sc);
-      }
-      return;
-    }
-
-    let x = x0;
-    if (align === "center") {
-      let width = 0;
-      for (const ch of text) width += mctx.measureText(ch).width + tracking * sc;
-      width -= tracking * sc;
-      x = x0 - width / (2 * sc);
-    }
-    for (const ch of text) {
-      mctx.fillText(ch, x * sc, y0 * sc);
-      x += (mctx.measureText(ch).width + tracking * sc) / sc;
-    }
-  };
-
-  mctx.fillStyle = "#000";
-  drawText(tx, ty);
-
-  const img = mctx.getImageData(0, 0, mw, mh).data;
-
-  ctx.save();
-  ctx.fillStyle = fillColor || "#000";
-
-  for (let rr = r0; rr < rN; rr++) {
-    for (let cc = c0; cc < cN; cc++) {
-      const cell = getCellRect(rr, cc);
-
-      const cx0 = Math.floor(((cell.x - x) / w) * mw);
-      const cy0 = Math.floor(((cell.y - y) / h) * mh);
-      const cx1 = Math.ceil(((cell.x + cell.w - x) / w) * mw);
-      const cy1 = Math.ceil(((cell.y + cell.h - y) / h) * mh);
-
-      const ax0 = clamp(cx0, 0, mw);
-      const ay0 = clamp(cy0, 0, mh);
-      const ax1 = clamp(cx1, 0, mw);
-      const ay1 = clamp(cy1, 0, mh);
-
-      const ww = Math.max(0, ax1 - ax0);
-      const hh = Math.max(0, ay1 - ay0);
-      if (ww === 0 || hh === 0) continue;
-
-      const sx = Math.max(3, Math.floor(ww / 10));
-      const sy = Math.max(3, Math.floor(hh / 10));
-
-      let hits = 0;
-      let total = 0;
-
-      for (let yy = ay0; yy < ay1; yy += sy) {
-        for (let xx = ax0; xx < ax1; xx += sx) {
-          const i = (yy * mw + xx) * 4;
-          const a = img[i + 3] / 255;
-          const lum = (img[i] + img[i + 1] + img[i + 2]) / (3 * 255);
-          const ink = a > 0 ? a : 1 - lum;
-          if (ink > 0.2) hits++;
-          total++;
-        }
-      }
-
-      const coverage = total ? hits / total : 0;
-      if (coverage >= threshold) {
-        ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
-      }
-    }
-  }
-
-  ctx.restore();
+  return null;
 }
 
 export default function App() {
@@ -301,11 +134,14 @@ export default function App() {
   const smoothAudioRef = React.useRef(0);
   const smoothBassRef = React.useRef(0);
 
+  // BPM
   const bpmRef = React.useRef({ bpm: null, smooth: null, lastUpdate: 0 });
 
+  // Image sampling (single image for color sampling)
   const imgRef = React.useRef(null);
   const imgCanvasRef = React.useRef(null);
 
+  // Image String (5 images)
   const imgSeqRef = React.useRef(
     Array.from({ length: 5 }, () => ({ loaded: false, name: "", canvas: null }))
   );
@@ -313,10 +149,11 @@ export default function App() {
     Array.from({ length: 5 }, () => ({ loaded: false, name: "" }))
   );
 
+  // Mobile controls drawer
   const [panelOpen, setPanelOpen] = React.useState(false);
 
   const [audioOn, setAudioOn] = React.useState(false);
-  const [audioMode, setAudioMode] = React.useState("mic");
+  const [audioMode, setAudioMode] = React.useState("mic"); // mic | file
   const [audioFileUrl, setAudioFileUrl] = React.useState("");
   const [audioFileName, setAudioFileName] = React.useState("");
   const [audioFilePlaying, setAudioFilePlaying] = React.useState(false);
@@ -332,10 +169,11 @@ export default function App() {
   const [audioDevs, setAudioDevs] = React.useState([]);
   const [selAudio, setSelAudio] = React.useState("");
 
+  // Painting state
   const [paint, setPaint] = React.useState({
-    mode: "none",
+    mode: "none", // none | color | sample | imgseq
     color: "#111111",
-    useSeq: false,
+    useSeq: false, // if true, painted cells use animated palette string
   });
 
   const [imageInfo, setImageInfo] = React.useState({ loaded: false, name: "" });
@@ -343,6 +181,7 @@ export default function App() {
   const [s, setS] = React.useState({
     pat: "swiss-grid",
 
+    // common
     thick: 2,
     space: 40,
 
@@ -372,68 +211,73 @@ export default function App() {
     cycle: "crossfade",
     behave: "string-wave",
 
-    strBehave: "wave",
+    // string behavior shared
+    strBehave: "wave", // cycle | wave | random | squeeze
     stagger: 0.08,
 
-    squeezeAmt: 0.85,
-    squeezeSpd: 1.5,
-    squeezeFlow: 1.0,
-    squeezeDensity: 1.0,
+    // "String % / squeeze" behaviour controls
+    squeezeAmt: 0.85, // 0..0.98
+    squeezeSpd: 1.5, // speed multiplier
+    squeezeFlow: 1.0, // how fast the text scrolls horizontally
+    squeezeDensity: 1.0, // glyph spacing multiplier (smaller => denser)
 
+    // Swiss grid: base always-on string glyphs
     swissBaseOn: true,
     swissCharScale: 1,
 
-    speedMode: "manual",
+    // BPM sync
+    speedMode: "manual", // manual | bpm
     bpmTarget: 120,
     bpmMultiply: 1,
 
-    fillAs: "background",
+    // Fill behavior
+    fillAs: "background", // background | ink
 
+    // Fonts
     googleFont: "Inter",
     customFont: null,
 
+    // Color sequence (5 colors) + animation
     colorSeqOn: false,
-    colorSeqBehave: "same",
+    colorSeqBehave: "same", // same | cycle | wave | random
     colorSeqSpeed: 1,
     colorSeq: ["#111111", "#ff0055", "#00c2ff", "#00ff88", "#ffe600"],
 
+    // Image preview
     imgPreviewOn: false,
     imgPreviewAlpha: 0.15,
 
+    // Image String (5 images)
     imgSeqOn: false,
-    imgSeqBehave: "same",
+    imgSeqBehave: "same", // same | cycle | wave | random
     imgSeqSpeed: 1,
 
-    // Variable grid density (move vertical/horizontal lines)
-    varColsOn: false,
-    colFocus: 0.5,
-    colStrength: 6,
-    colSigma: 0.18,
+    // Swiss grid: grid focus + radial density scaling
+    radialGridOn: false,
+    gridCenterX: 0.5,
+    gridCenterY: 0.5,
+    radialStrength: 1.2,
+    radialMaxScale: 2.2,
 
-    varRowsOn: false,
-    rowFocus: 0.5,
-    rowStrength: 6,
-    rowSigma: 0.18,
+    // NEW: axis density warp (non-uniform columns/rows)
+    colWarpOn: false,
+    colWarpCenter: 0.5,
+    colWarpStrength: 2.5,
+    colWarpWidth: 0.25,
 
-    // Span text region + rendering
+    rowWarpOn: false,
+    rowWarpCenter: 0.5,
+    rowWarpStrength: 2.5,
+    rowWarpWidth: 0.25,
+
+    // Swiss grid: spanning text chopped by cells (TRUE glyph clip)
     spanOn: false,
-    spanText: "TYPE",
-    spanRow: 0,
-    spanCol: 0,
-    spanCols: 8,
-    spanRows: 3,
+    spanText: "R",
+    spanRow: 6,
+    spanCol: 4,
+    spanCols: 7, // width in cells
+    spanRows: 8, // height in cells
     spanFontScale: 1.0,
-    spanTracking: 0,
-    spanAlign: "center",
-
-    // ✅ NEW: fill-cells mask mode
-    spanFillOn: true,
-    spanFillColor: "#000000",
-    spanFillThreshold: 0.18,
-    spanMaskScale: 2,
-
-    selEl: "char",
-    draw: false,
   });
 
   const [svgPath, setSvgPath] = React.useState(null);
@@ -466,6 +310,7 @@ export default function App() {
           const [st, n, v] = e.data;
           const msg = st >> 4;
 
+          // Note on
           if (msg === 9 && v > 0) {
             midiNoteRef.current = n;
             midiVelRef.current = v / 127;
@@ -473,6 +318,7 @@ export default function App() {
             midiVelRef.current = 0;
           }
 
+          // CC: treat as mild activity too
           if (msg === 11) {
             midiVelRef.current = Math.max(midiVelRef.current, (v ?? 0) / 127);
           }
@@ -482,7 +328,7 @@ export default function App() {
     });
   }, [midiOn]);
 
-  // --- Audio + Levels + BPM ---
+  // --- Audio + Levels + BPM (mic OR uploaded audio file) ---
   React.useEffect(() => {
     if (!audioOn) {
       try {
@@ -492,7 +338,9 @@ export default function App() {
         }
       } catch {}
       try {
-        if (micStreamRef.current) micStreamRef.current.getTracks().forEach((t) => t.stop());
+        if (micStreamRef.current) {
+          micStreamRef.current.getTracks().forEach((t) => t.stop());
+        }
       } catch {}
       micStreamRef.current = null;
 
@@ -541,6 +389,7 @@ export default function App() {
       setAudioLvl(smoothAudioRef.current);
       setBassLvl(smoothBassRef.current);
 
+      // BPM update ~ every 700ms
       const now = performance.now();
       if (now - bpmRef.current.lastUpdate > 700) {
         const td = new Float32Array(an.fftSize);
@@ -643,8 +492,7 @@ export default function App() {
 
   const dist = (x, y, t, str, tp) => {
     const f = 0.008;
-    let dx = 0,
-      dy = 0;
+    let dx = 0, dy = 0;
     if (tp === "liquify") {
       dx = noise((x + t * 30) * f, y * f) * str;
       dy = noise((x + t * 30) * f + 100, (y + t * 20) * f + 100) * str;
@@ -663,48 +511,56 @@ export default function App() {
     return { x: dx, y: dy };
   };
 
-  // --- Speed mapping (manual vs BPM) ---
-  const getSpeedFactor = (baseSpeed) => {
-    if (s.speedMode !== "bpm") return baseSpeed;
-    const detected = bpmRef.current.smooth;
-    const bpm = detected ?? s.bpmTarget;
-    const factor = (bpm / 120) * s.bpmMultiply;
-    return baseSpeed * factor;
-  };
-
-  // --- Variable edges (swiss-grid) ---
-  const colEdges = React.useMemo(() => {
-    if (s.pat !== "swiss-grid") return null;
-    return s.varColsOn
-      ? buildVariableEdges(s.cols, s.colFocus, s.colStrength, s.colSigma)
-      : Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
-  }, [s.pat, s.cols, s.varColsOn, s.colFocus, s.colStrength, s.colSigma]);
-
-  const rowEdges = React.useMemo(() => {
-    if (s.pat !== "swiss-grid") return null;
-    return s.varRowsOn
-      ? buildVariableEdges(s.rows, s.rowFocus, s.rowStrength, s.rowSigma)
-      : Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
-  }, [s.pat, s.rows, s.varRowsOn, s.rowFocus, s.rowStrength, s.rowSigma]);
-
   // --- Helpers: indices ---
+  const getSwissEdges = React.useCallback(
+    (w, h) => {
+      // If radial is on, we keep old geom (no edges)
+      if (s.radialGridOn) return null;
+      const xEdges = buildWarpedEdges(s.cols, w, s.colWarpOn, s.colWarpCenter, s.colWarpStrength, s.colWarpWidth);
+      const yEdges = buildWarpedEdges(s.rows, h, s.rowWarpOn, s.rowWarpCenter, s.rowWarpStrength, s.rowWarpWidth);
+      return { xEdges, yEdges };
+    },
+    [
+      s.cols,
+      s.rows,
+      s.radialGridOn,
+      s.colWarpOn,
+      s.colWarpCenter,
+      s.colWarpStrength,
+      s.colWarpWidth,
+      s.rowWarpOn,
+      s.rowWarpCenter,
+      s.rowWarpStrength,
+      s.rowWarpWidth,
+    ]
+  );
+
   const getSwissIdx = React.useCallback(
     (cx, cy) => {
       const cv = canvasRef.current;
       if (!cv) return null;
 
-      const x01 = cx / cv.width;
-      const y01 = cy / cv.height;
+      const w = cv.width;
+      const h = cv.height;
 
-      const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
-      const re = rowEdges || Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
+      // Radial mode: revert to uniform idx
+      if (s.radialGridOn) {
+        const cw = w / s.cols;
+        const ch = h / s.rows;
+        const col = Math.floor(cx / cw);
+        const row = Math.floor(cy / ch);
+        return col >= 0 && col < s.cols && row >= 0 && row < s.rows ? row * s.cols + col : null;
+      }
 
-      const col = findIndexFromEdges(ce, x01);
-      const row = findIndexFromEdges(re, y01);
+      const edges = getSwissEdges(w, h);
+      if (!edges) return null;
 
-      return col >= 0 && col < s.cols && row >= 0 && row < s.rows ? row * s.cols + col : null;
+      const col = findBin(edges.xEdges, cx);
+      const row = findBin(edges.yEdges, cy);
+      if (col == null || row == null) return null;
+      return row * s.cols + col;
     },
-    [s.cols, s.rows, colEdges, rowEdges]
+    [s.cols, s.rows, s.radialGridOn, getSwissEdges]
   );
 
   const getCharGridIdx = React.useCallback(
@@ -736,11 +592,12 @@ export default function App() {
     return '-apple-system, "SF Pro Display", sans-serif';
   };
 
+  // --- Re-seed ---
   const gen = () => {
     setCells((prev) => prev.map((c) => ({ ...c, ph: Math.random() * Math.PI * 2 })));
   };
 
-  // --- Image upload (single for sampling/preview) ---
+  // --- Image upload + build sampling canvas (single image for color sampling) ---
   const handleImageUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -807,10 +664,8 @@ export default function App() {
     const off = imgCanvasRef.current;
     if (!cv || !img || !off) return null;
 
-    const cw = cv.width,
-      ch = cv.height;
-    const iw = img.width,
-      ih = img.height;
+    const cw = cv.width, ch = cv.height;
+    const iw = img.width, ih = img.height;
 
     const scale = Math.max(cw / iw, ch / ih);
     const drawW = iw * scale;
@@ -846,13 +701,22 @@ export default function App() {
   };
   const removeCell = (idx) => setCells((prev) => prev.filter((c) => c.idx !== idx));
 
-  // --- Pointer to canvas ---
+  // --- Pointer to canvas (PointerEvents: mouse/touch/pen) ---
   const pointerToCanvas = (e) => {
     const cv = canvasRef.current;
     const r = cv.getBoundingClientRect();
     const x = (e.clientX - r.left) * (cv.width / r.width);
     const y = (e.clientY - r.top) * (cv.height / r.height);
     return { x, y };
+  };
+
+  // --- Speed mapping (manual vs BPM) ---
+  const getSpeedFactor = (baseSpeed) => {
+    if (s.speedMode !== "bpm") return baseSpeed;
+    const detected = bpmRef.current.smooth;
+    const bpm = detected ?? s.bpmTarget;
+    const factor = (bpm / 120) * s.bpmMultiply;
+    return baseSpeed * factor;
   };
 
   // --- Palette helpers ---
@@ -957,29 +821,61 @@ export default function App() {
     [imageSeqIndex]
   );
 
-  // --- Swiss grid geometry (variable edges) ---
+  // --- Swiss grid cell geometry ---
   const swissCellGeom = (r, c, w, h) => {
-    const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
-    const re = rowEdges || Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
+    // Radial density grid uses old geometry
+    if (s.radialGridOn) {
+      const baseW = w / s.cols;
+      const baseH = h / s.rows;
 
-    const x0 = ce[c] * w;
-    const x1 = ce[c + 1] * w;
-    const y0 = re[r] * h;
-    const y1 = re[r + 1] * h;
+      const u = s.cols <= 1 ? 0 : c / (s.cols - 1);
+      const v = s.rows <= 1 ? 0 : r / (s.rows - 1);
+      const dx = u - (s.gridCenterX ?? 0.5);
+      const dy = v - (s.gridCenterY ?? 0.5);
+      const distN = Math.sqrt(dx * dx + dy * dy);
+
+      const strength = Math.max(0, s.radialStrength ?? 1.2);
+      const maxScale = Math.max(1, s.radialMaxScale ?? 2.2);
+      const sc = clamp(1 + distN * strength, 1, maxScale);
+
+      const wu = (s.gridCenterX ?? 0.5) + dx * sc;
+      const wv = (s.gridCenterY ?? 0.5) + dy * sc;
+
+      const cx = clamp(wu, 0, 1) * w;
+      const cy = clamp(wv, 0, 1) * h;
+
+      const cellW = baseW * sc;
+      const cellH = baseH * sc;
+
+      return { x: cx - cellW / 2, y: cy - cellH / 2, w: cellW, h: cellH, cx, cy };
+    }
+
+    // Non-uniform edges if warp enabled
+    const xEdges = buildWarpedEdges(s.cols, w, s.colWarpOn, s.colWarpCenter, s.colWarpStrength, s.colWarpWidth);
+    const yEdges = buildWarpedEdges(s.rows, h, s.rowWarpOn, s.rowWarpCenter, s.rowWarpStrength, s.rowWarpWidth);
+
+    const x0 = xEdges[c];
+    const x1 = xEdges[c + 1];
+    const y0 = yEdges[r];
+    const y1 = yEdges[r + 1];
+
+    const cw = x1 - x0;
+    const ch = y1 - y0;
 
     return {
       x: x0,
       y: y0,
-      w: x1 - x0,
-      h: y1 - y0,
-      cx: (x0 + x1) / 2,
-      cy: (y0 + y1) / 2,
+      w: cw,
+      h: ch,
+      cx: x0 + cw / 2,
+      cy: y0 + ch / 2,
     };
   };
 
-  // --- SQUEEZE renderer ---
+  // --- SQUEEZE renderer (clipped inside a rect) ---
   const drawSqueezeStringInRect = (ctx, rect, chs, st, inkColor) => {
     if (!chs || chs.length === 0) return;
+
     const { x, y, w, h } = rect;
 
     ctx.save();
@@ -999,10 +895,11 @@ export default function App() {
     const flow = getSpeedFactor(s.squeezeFlow || 1);
     const scroll = st * 160 * flow;
 
-    const mw = ctx.measureText(chs[0]).width || 10;
+    const sampleGlyph = chs[0];
+    const mw = ctx.measureText(sampleGlyph).width || 10;
     const spacing = Math.max(6, mw * (s.squeezeDensity ?? 1));
-    const centerY = y + h / 2;
 
+    const centerY = y + h / 2;
     const cx = x + w / 2;
     const cy = y + h / 2;
     ctx.translate(cx, cy);
@@ -1018,10 +915,11 @@ export default function App() {
       const gi = ((k % chs.length) + chs.length) % chs.length;
       ctx.fillText(chs[gi], px, centerY);
     }
+
     ctx.restore();
   };
 
-  // --- Apply paint ---
+  // --- Apply paint / draw ---
   const applyPaintToIdx = (idx, cx, cy) => {
     if (idx == null) return;
     const useSeq = !!paint.useSeq;
@@ -1048,6 +946,7 @@ export default function App() {
     upsertCell(idx, { type: s.selEl, ph: Math.random() * Math.PI * 2 });
   };
 
+  // Clamp menu to viewport
   const openMenuAt = (clientX, clientY, idx) => {
     const pad = 12;
     const menuW = 220;
@@ -1118,8 +1017,7 @@ export default function App() {
     const cv = canvasRef.current;
     if (!cv) return;
     const ctx = cv.getContext("2d");
-    const w = cv.width,
-      h = cv.height;
+    const w = cv.width, h = cv.height;
 
     ctx.fillStyle = "#FAFAFA";
     ctx.fillRect(0, 0, w, h);
@@ -1135,18 +1033,16 @@ export default function App() {
 
     ctx.fillStyle = "#0A0A0A";
 
-    // basic patterns
+    // --- patterns ---
     if (s.pat === "vertical-lines") {
       const th = s.thick * (1 + bass * 0.5);
       for (let x = 0; x < w; x += s.space) {
         ctx.beginPath();
         for (let y = 0; y < h; y += 2) {
-          let dx = x,
-            dy = y;
+          let dx = x, dy = y;
           if (s.distOn) {
             const d = dist(x - w / 2, y - h / 2, at, s.distStr * (1 + aud), s.distType);
-            dx += d.x;
-            dy += d.y;
+            dx += d.x; dy += d.y;
           }
           if (y === 0) ctx.moveTo(dx, dy);
           else ctx.lineTo(dx, dy);
@@ -1162,12 +1058,10 @@ export default function App() {
       for (let y = 0; y < h; y += s.space) {
         ctx.beginPath();
         for (let x = 0; x < w; x += 2) {
-          let dx = x,
-            dy = y;
+          let dx = x, dy = y;
           if (s.distOn) {
             const d = dist(x - w / 2, y - h / 2, at, s.distStr * (1 + aud), s.distType);
-            dx += d.x;
-            dy += d.y;
+            dx += d.x; dy += d.y;
           }
           if (x === 0) ctx.moveTo(dx, dy);
           else ctx.lineTo(dx, dy);
@@ -1182,12 +1076,10 @@ export default function App() {
       const ds = s.dotSz * (1 + (bass + midi) * 0.6);
       for (let y = 0; y < h; y += s.space)
         for (let x = 0; x < w; x += s.space) {
-          let dx = x,
-            dy = y;
+          let dx = x, dy = y;
           if (s.distOn) {
             const d = dist(x - w / 2, y - h / 2, at, s.distStr * (1 + aud), s.distType);
-            dx += d.x;
-            dy += d.y;
+            dx += d.x; dy += d.y;
           }
           ctx.beginPath();
           ctx.arc(dx, dy, ds, 0, Math.PI * 2);
@@ -1200,12 +1092,10 @@ export default function App() {
       const ss = s.shapeSz * (1 + (bass + midi) * 0.6);
       for (let y = 0; y < h; y += s.space)
         for (let x = 0; x < w; x += s.space) {
-          let dx = x,
-            dy = y;
+          let dx = x, dy = y;
           if (s.distOn) {
             const d = dist(x - w / 2, y - h / 2, at, s.distStr * (1 + aud), s.distType);
-            dx += d.x;
-            dy += d.y;
+            dx += d.x; dy += d.y;
           }
           ctx.fillRect(dx - ss / 2, dy - ss / 2, ss, ss);
         }
@@ -1229,7 +1119,7 @@ export default function App() {
       return;
     }
 
-    // build map of painted/overlay cells
+    // --- build map of painted/overlay cells ---
     const cellByIdx = new Map();
     for (const c of cells) cellByIdx.set(c.idx, c);
 
@@ -1256,13 +1146,7 @@ export default function App() {
           const entry = cellByIdx.get(idxLinear);
 
           const fillCol = resolveFillColor({ paintObj: entry?.paint, st, r, c });
-          const imgBg = resolveFillImageCanvas({
-            paintObj: entry?.paint,
-            globalOn: s.imgSeqOn,
-            st,
-            r,
-            c,
-          });
+          const imgBg = resolveFillImageCanvas({ paintObj: entry?.paint, globalOn: s.imgSeqOn, st, r, c });
 
           if (imgBg) {
             ctx.save();
@@ -1279,13 +1163,7 @@ export default function App() {
             ctx.restore();
           }
 
-          const inkOverride = resolveInkColor({
-            paintObj: entry?.paint,
-            globalOn: s.colorSeqOn,
-            st,
-            r,
-            c,
-          });
+          const inkOverride = resolveInkColor({ paintObj: entry?.paint, globalOn: s.colorSeqOn, st, r, c });
 
           if (s.strBehave === "squeeze" && chs.length > 0) {
             ctx.save();
@@ -1295,7 +1173,7 @@ export default function App() {
               { x: x0, y: y0, w: s.space, h: s.space },
               chs,
               st,
-              s.fillAs === "ink" && fillCol ? fillCol : inkOverride
+              (s.fillAs === "ink" && fillCol) ? fillCol : inkOverride
             );
             ctx.restore();
           } else {
@@ -1323,59 +1201,6 @@ export default function App() {
         }
       }
 
-      // ✅ SPAN: fill cells (mask) or draw chopped text (optional)
-      if (s.spanOn && s.spanText?.length) {
-        const r0 = clamp(s.spanRow, 0, rows - 1);
-        const c0 = clamp(s.spanCol, 0, cols - 1);
-        const spanCols = clamp(s.spanCols ?? 8, 1, cols - c0);
-        const spanRows = clamp(s.spanRows ?? 1, 1, rows - r0);
-
-        const rN = r0 + spanRows;
-        const cN = c0 + spanCols;
-
-        const rx = c0 * s.space;
-        const ry = r0 * s.space;
-        const rw = spanCols * s.space;
-        const rh = spanRows * s.space;
-
-        if (s.spanFillOn) {
-          fillCellsFromTextMask({
-            ctx,
-            text: s.spanText,
-            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
-            getCellRect: (rr, cc) => ({
-              x: cc * s.space,
-              y: rr * s.space,
-              w: s.space,
-              h: s.space,
-            }),
-            fontFamily: getFontFamily(),
-            fontScale: s.spanFontScale,
-            tracking: s.spanTracking,
-            align: s.spanAlign || "center",
-            fillColor: s.spanFillColor || "#000",
-            threshold: s.spanFillThreshold ?? 0.18,
-            maskScale: s.spanMaskScale ?? 2,
-          });
-        } else {
-          drawSpanTextChopped({
-            ctx,
-            text: s.spanText,
-            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
-            getCellRect: (rr, cc) => ({
-              x: cc * s.space,
-              y: rr * s.space,
-              w: s.space,
-              h: s.space,
-            }),
-            fontFamily: getFontFamily(),
-            fontScale: s.spanFontScale,
-            tracking: s.spanTracking,
-            align: s.spanAlign || "center",
-          });
-        }
-      }
-
       const showRef = (paint.mode === "sample" || s.imgPreviewOn) && imgRef.current;
       if (showRef) {
         const img = imgRef.current;
@@ -1394,32 +1219,34 @@ export default function App() {
 
     // --- SWISS GRID ---
     if (s.pat === "swiss-grid") {
-      if (s.grid) {
+      // grid stroke (for radial grid, we skip drawing lines—still useful)
+      if (s.grid && !s.radialGridOn) {
+        // draw warped grid lines if warp is on; else uniform
+        const xEdges = buildWarpedEdges(s.cols, w, s.colWarpOn, s.colWarpCenter, s.colWarpStrength, s.colWarpWidth);
+        const yEdges = buildWarpedEdges(s.rows, h, s.rowWarpOn, s.rowWarpCenter, s.rowWarpStrength, s.rowWarpWidth);
+
         ctx.strokeStyle = "#E5E5E5";
         ctx.lineWidth = 0.5;
 
-        const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
-        const re = rowEdges || Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
-
-        for (let i = 0; i < ce.length; i++) {
-          const x = ce[i] * w;
+        for (let i = 0; i < xEdges.length; i++) {
           ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, h);
+          ctx.moveTo(xEdges[i], 0);
+          ctx.lineTo(xEdges[i], h);
           ctx.stroke();
         }
-        for (let i = 0; i < re.length; i++) {
-          const y = re[i] * h;
+        for (let i = 0; i < yEdges.length; i++) {
           ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(w, y);
+          ctx.moveTo(0, yEdges[i]);
+          ctx.lineTo(w, yEdges[i]);
           ctx.stroke();
         }
+      } else if (s.grid && s.radialGridOn) {
+        // (optional) skip in radial mode
       }
 
       const chs = s.chars.split("");
 
-      // base layer letters
+      // 1) base layer letters (always on)
       if (s.swissBaseOn && chs.length > 0) {
         for (let r = 0; r < s.rows; r++) {
           for (let c = 0; c < s.cols; c++) {
@@ -1434,13 +1261,7 @@ export default function App() {
             const st = ct + (r + c) * s.stagger;
 
             const fillCol = resolveFillColor({ paintObj: entry?.paint, st, r, c });
-            const imgBg = resolveFillImageCanvas({
-              paintObj: entry?.paint,
-              globalOn: s.imgSeqOn,
-              st,
-              r,
-              c,
-            });
+            const imgBg = resolveFillImageCanvas({ paintObj: entry?.paint, globalOn: s.imgSeqOn, st, r, c });
 
             if (imgBg) {
               ctx.save();
@@ -1472,7 +1293,7 @@ export default function App() {
                 { x: g.x, y: g.y, w: g.w, h: g.h },
                 chs,
                 st,
-                s.fillAs === "ink" && fillCol ? fillCol : inkOverride
+                (s.fillAs === "ink" && fillCol) ? fillCol : inkOverride
               );
               ctx.restore();
             } else {
@@ -1501,53 +1322,48 @@ export default function App() {
         }
       }
 
-      // ✅ SPAN: this is the part you asked for (fill cells, not overlay)
+      // 2) TRUE SPAN TEXT (glyph clipped by cells)
       if (s.spanOn && s.spanText?.length) {
-        const r0 = clamp(s.spanRow, 0, s.rows - 1);
-        const c0 = clamp(s.spanCol, 0, s.cols - 1);
-        const spanCols = clamp(s.spanCols ?? 8, 1, s.cols - c0);
-        const spanRows = clamp(s.spanRows ?? 1, 1, s.rows - r0);
+        const row = clamp(s.spanRow, 0, s.rows - 1);
+        const col = clamp(s.spanCol, 0, s.cols - 1);
+        const spanCols = clamp(s.spanCols ?? 4, 1, s.cols - col);
+        const spanRows = clamp(s.spanRows ?? 4, 1, s.rows - row);
 
-        const rN = r0 + spanRows;
-        const cN = c0 + spanCols;
+        const startGeom = swissCellGeom(row, col, w, h);
+        const endGeom = swissCellGeom(row + spanRows - 1, col + spanCols - 1, w, h);
 
-        const g00 = swissCellGeom(r0, c0, w, h);
-        const g11 = swissCellGeom(rN - 1, cN - 1, w, h);
+        const spanX = startGeom.x;
+        const spanY = startGeom.y;
+        const spanW = endGeom.x + endGeom.w - spanX;
+        const spanH = endGeom.y + endGeom.h - spanY;
 
-        const rx = g00.x;
-        const ry = g00.y;
-        const rw = g11.x + g11.w - g00.x;
-        const rh = g11.y + g11.h - g00.y;
+        const fontSize = Math.max(6, spanH * 0.9 * (s.spanFontScale || 1));
 
-        if (s.spanFillOn) {
-          fillCellsFromTextMask({
-            ctx,
-            text: s.spanText,
-            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
-            getCellRect: (rr, cc) => swissCellGeom(rr, cc, w, h),
-            fontFamily: getFontFamily(),
-            fontScale: s.spanFontScale,
-            tracking: s.spanTracking,
-            align: s.spanAlign || "center",
-            fillColor: s.spanFillColor || "#000",
-            threshold: s.spanFillThreshold ?? 0.18,
-            maskScale: s.spanMaskScale ?? 2,
-          });
-        } else {
-          drawSpanTextChopped({
-            ctx,
-            text: s.spanText,
-            region: { x: rx, y: ry, w: rw, h: rh, r0, c0, rN, cN },
-            getCellRect: (rr, cc) => swissCellGeom(rr, cc, w, h),
-            fontFamily: getFontFamily(),
-            fontScale: s.spanFontScale,
-            tracking: s.spanTracking,
-            align: s.spanAlign || "center",
-          });
+        ctx.save();
+        ctx.font = `900 ${fontSize}px ${getFontFamily()}`;
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#000";
+
+        const textX = spanX + spanW / 2;
+        const textY = spanY + spanH / 2;
+
+        for (let rr = 0; rr < spanRows; rr++) {
+          for (let cc = 0; cc < spanCols; cc++) {
+            const g = swissCellGeom(row + rr, col + cc, w, h);
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(g.x, g.y, g.w, g.h);
+            ctx.clip();
+            ctx.fillText(s.spanText, textX, textY);
+            ctx.restore();
+          }
         }
+
+        ctx.restore();
       }
 
-      // overlay objects drawn into selected cells (your original behavior)
+      // 3) overlay objects (drawn cells)
       const overlayEntries = cells.filter((c) => c.type && c.type !== "paint");
       overlayEntries.forEach((cel, idx) => {
         const col = cel.idx % s.cols;
@@ -1559,13 +1375,7 @@ export default function App() {
         const ab = ease((bass + midi) * 0.5);
 
         const fillCol = resolveFillColor({ paintObj: cel.paint, st, r: row, c: col });
-        const imgBg = resolveFillImageCanvas({
-          paintObj: cel.paint,
-          globalOn: s.imgSeqOn,
-          st,
-          r: row,
-          c: col,
-        });
+        const imgBg = resolveFillImageCanvas({ paintObj: cel.paint, globalOn: s.imgSeqOn, st, r: row, c: col });
 
         if (imgBg) {
           ctx.save();
@@ -1591,1223 +1401,4 @@ export default function App() {
         });
 
         ctx.save();
-        if (s.fillAs === "ink" && fillCol) ctx.fillStyle = fillCol;
-        else if (inkOverride) ctx.fillStyle = inkOverride;
-
-        ctx.translate(g.cx, g.cy);
-        const gr = (s.rot + aud * 45) * (Math.PI / 180);
-        if (gr !== 0) ctx.rotate(gr);
-
-        if (s.behave === "string-wave") {
-          const waveFreq = 2 + idx * 0.1;
-          const waveAmp = Math.min(g.w, g.h) * 0.15 * (1 + ab * 0.5);
-          const phase1 = Math.sin(lt * waveFreq + cel.ph);
-          const phase2 = Math.cos(lt * (waveFreq * 1.5) + cel.ph + 1);
-          const damping = 0.7 + ab * 0.3;
-          ctx.translate(phase1 * waveAmp * damping, phase2 * waveAmp * damping);
-        } else if (s.behave === "string-pendulum") {
-          const swingAngle = Math.sin(lt * 1.5 + cel.ph) * (0.5 + ab * 0.5);
-          ctx.rotate(swingAngle);
-        } else if (s.behave === "string-elastic") {
-          const bounce = Math.sin(lt * 4 + cel.ph);
-          const elasticity = 1 + bounce * (0.3 + ab * 0.4);
-          const squash = 1 / Math.sqrt(elasticity);
-          ctx.scale(squash, elasticity);
-        }
-
-        const sz = Math.min(g.w, g.h) * 0.5 * s.swissCharScale;
-
-        if (cel.type === "char") {
-          const chs2 = s.chars.split("");
-          if (chs2.length > 0) {
-            ctx.font = `${sz * 1.2}px ${getFontFamily()}`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            if (s.cycle === "crossfade") {
-              const cf = (lt * 2) % chs2.length;
-              const ci = Math.floor(cf);
-              const ni = (ci + 1) % chs2.length;
-              const pr = cf - ci;
-              const ep = ease(pr);
-              ctx.globalAlpha = 1 - ep;
-              ctx.fillText(chs2[ci], 0, 0);
-              ctx.globalAlpha = ep;
-              ctx.fillText(chs2[ni], 0, 0);
-              ctx.globalAlpha = 1;
-            } else {
-              ctx.fillText(chs2[Math.floor(lt * 2) % chs2.length], 0, 0);
-            }
-          }
-        } else if (cel.type === "dot") {
-          ctx.beginPath();
-          ctx.arc(0, 0, sz * 0.4 * (1 + ab * 0.4), 0, Math.PI * 2);
-          ctx.fill();
-        } else if (cel.type === "square") {
-          const ss = sz * 0.8 * (1 + ab * 0.4);
-          ctx.fillRect(-ss / 2, -ss / 2, ss, ss);
-        } else if (cel.type === "svg" && svgPath) {
-          const scale = sz / Math.max(svgPath.width, svgPath.height);
-          ctx.save();
-          ctx.scale(scale, scale);
-          ctx.translate(-svgPath.width / 2, -svgPath.height / 2);
-          const path = new Path2D(svgPath.path);
-          ctx.fill(path);
-          ctx.restore();
-        }
-
-        ctx.restore();
-      });
-
-      const showRef = (paint.mode === "sample" || s.imgPreviewOn) && imgRef.current;
-      if (showRef) {
-        const img = imgRef.current;
-        const scale = Math.max(w / img.width, h / img.height);
-        const dw = img.width * scale;
-        const dh = img.height * scale;
-        const ox = (w - dw) / 2;
-        const oy = (h - dh) / 2;
-        ctx.save();
-        ctx.globalAlpha = s.imgPreviewAlpha ?? 0.15;
-        ctx.drawImage(img, ox, oy, dw, dh);
-        ctx.restore();
-      }
-    }
-  };
-
-  React.useEffect(() => {
-    const loop = (t) => {
-      render(t);
-      animRef.current = requestAnimationFrame(loop);
-    };
-    animRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s, cells, svgPath, paint, colEdges, rowEdges]);
-
-  // canvas resize
-  React.useEffect(() => {
-    const rsz = () => {
-      const cv = canvasRef.current;
-      if (!cv) return;
-      cv.width = cv.offsetWidth;
-      cv.height = cv.offsetHeight;
-    };
-    rsz();
-    window.addEventListener("resize", rsz);
-    window.addEventListener("orientationchange", rsz);
-    return () => {
-      window.removeEventListener("resize", rsz);
-      window.removeEventListener("orientationchange", rsz);
-    };
-  }, []);
-
-  // Disable touch gestures on canvas
-  React.useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    cv.style.touchAction = "none";
-  }, []);
-
-  // load google font
-  React.useEffect(() => {
-    if (!s.googleFont) return;
-    const link = document.createElement("link");
-    link.href = `https://fonts.googleapis.com/css2?family=${s.googleFont.replace(
-      / /g,
-      "+"
-    )}:wght@400;600;700&display=swap`;
-    link.rel = "stylesheet";
-    document.head.appendChild(link);
-    return () => document.head.removeChild(link);
-  }, [s.googleFont]);
-
-  const handleFontUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const fontFace = new FontFace("CustomFont", `url(${ev.target.result})`);
-      fontFace.load().then((loaded) => {
-        document.fonts.add(loaded);
-        setS((p) => ({ ...p, customFont: "CustomFont" }));
-      });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleSvgUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const parser = new DOMParser();
-      const svgDoc = parser.parseFromString(ev.target.result, "image/svg+xml");
-      const svgEl = svgDoc.querySelector("svg");
-      const pathEl = svgEl?.querySelector("path");
-      if (pathEl && svgEl) {
-        const pathData = pathEl.getAttribute("d");
-        const viewBox = svgEl.getAttribute("viewBox") || "0 0 100 100";
-        const [, , vw, vh] = viewBox.split(" ").map(Number);
-        setSvgPath({ path: pathData, width: vw, height: vh });
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const interactive = s.pat === "swiss-grid" || s.pat === "char-grid";
-  const bpmDisplay = bpmRef.current.smooth;
-
-  return (
-    <div className="w-full h-[100svh] bg-white flex flex-col md:flex-row">
-      {panelOpen && (
-        <div
-          className="fixed inset-0 bg-black/30 z-30 md:hidden"
-          onClick={() => setPanelOpen(false)}
-        />
-      )}
-
-      <div
-        className={
-          "fixed md:static z-40 md:z-auto inset-y-0 left-0 w-80 max-w-[90vw] bg-neutral-50 border-r border-neutral-200 p-4 md:p-5 overflow-y-auto space-y-4 text-sm transform transition-transform duration-200 md:transform-none " +
-          (panelOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0")
-        }
-      >
-        <div className="flex gap-2">
-          <button
-            onClick={gen}
-            className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800 min-h-[44px]"
-            title="Re-seed phases"
-          >
-            <RotateCcw size={16} />
-          </button>
-          <button
-            onClick={() => {
-              const l = document.createElement("a");
-              l.download = "pattern.png";
-              l.href = canvasRef.current.toDataURL();
-              l.click();
-            }}
-            className="flex-1 flex justify-center px-4 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-neutral-800 min-h-[44px]"
-            title="Download PNG"
-          >
-            <Download size={16} />
-          </button>
-        </div>
-
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wider">Pattern</label>
-          <select
-            value={s.pat}
-            onChange={(e) => setS((p) => ({ ...p, pat: e.target.value }))}
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-          >
-            <option value="vertical-lines">Vertical Lines</option>
-            <option value="horizontal-lines">Horizontal Lines</option>
-            <option value="dots">Dots</option>
-            <option value="squares">Squares</option>
-            <option value="text">Text</option>
-            <option value="char-grid">Character Grid</option>
-            <option value="swiss-grid">Swiss Grid</option>
-          </select>
-        </div>
-
-        {/* Speed Sync */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold uppercase tracking-wider">Speed Sync</label>
-            <select
-              value={s.speedMode}
-              onChange={(e) => setS((p) => ({ ...p, speedMode: e.target.value }))}
-              className="px-2 py-1 bg-white border border-neutral-300 rounded-md text-xs"
-            >
-              <option value="manual">Manual</option>
-              <option value="bpm">BPM</option>
-            </select>
-          </div>
-
-          {s.speedMode === "bpm" && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-neutral-700">
-                  Detected:{" "}
-                  <span className="font-semibold">{bpmDisplay ? bpmDisplay.toFixed(1) : "—"}</span>{" "}
-                  BPM
-                </div>
-                <div className="text-[10px] text-neutral-500">(needs audio)</div>
-              </div>
-
-              <label className="block text-xs font-semibold uppercase tracking-wider">
-                Fallback BPM: {s.bpmTarget}
-              </label>
-              <input
-                type="range"
-                min="60"
-                max="200"
-                value={s.bpmTarget}
-                onChange={(e) => setS((p) => ({ ...p, bpmTarget: parseInt(e.target.value) }))}
-                className="w-full"
-              />
-
-              <label className="block text-xs font-semibold uppercase tracking-wider">
-                Multiplier: {s.bpmMultiply.toFixed(2)}×
-              </label>
-              <input
-                type="range"
-                min="0.25"
-                max="4"
-                step="0.01"
-                value={s.bpmMultiply}
-                onChange={(e) => setS((p) => ({ ...p, bpmMultiply: parseFloat(e.target.value) }))}
-                className="w-full"
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Audio */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold uppercase tracking-wider">Audio</label>
-            <button
-              onClick={() => setAudioOn(!audioOn)}
-              className={`p-1.5 rounded ${audioOn ? "bg-black text-white" : "bg-neutral-200"}`}
-            >
-              {audioOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-            </button>
-          </div>
-
-          <select
-            value={audioMode}
-            onChange={(e) => setAudioMode(e.target.value)}
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-          >
-            <option value="mic">Microphone</option>
-            <option value="file">Audio File</option>
-          </select>
-
-          {audioMode === "mic" && audioDevs.length > 0 && (
-            <select
-              value={selAudio}
-              onChange={(e) => setSelAudio(e.target.value)}
-              className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-            >
-              {audioDevs.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || `Device ${d.deviceId.slice(0, 8)}`}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {audioMode === "file" && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-neutral-700">{audioFileName || "No file selected"}</div>
-                <button
-                  onClick={async () => {
-                    const el = audioElRef.current;
-                    if (!el) return;
-                    try {
-                      if (audioFilePlaying) {
-                        el.pause();
-                        setAudioFilePlaying(false);
-                      } else {
-                        await el.play();
-                        setAudioFilePlaying(true);
-                      }
-                    } catch {
-                      setAudioFilePlaying(false);
-                    }
-                  }}
-                  className={`px-3 py-2 rounded-lg text-xs font-semibold min-h-[36px] ${
-                    audioFileUrl ? "bg-black text-white" : "bg-neutral-200 text-neutral-500"
-                  }`}
-                  disabled={!audioFileUrl}
-                >
-                  {audioFilePlaying ? "Pause" : "Play"}
-                </button>
-              </div>
-
-              <input
-                type="file"
-                accept="audio/*"
-                className="w-full text-xs"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
-                  if (audioFileUrl) URL.revokeObjectURL(audioFileUrl);
-                  const url = URL.createObjectURL(f);
-                  setAudioFileUrl(url);
-                  setAudioFileName(f.name);
-                }}
-              />
-            </div>
-          )}
-
-          {audioOn && (
-            <div className="space-y-1.5">
-              <div className="h-1 bg-neutral-200 rounded-full">
-                <div className="h-full bg-black transition-all" style={{ width: `${audioLvl * 100}%` }} />
-              </div>
-              <div className="h-1 bg-neutral-200 rounded-full">
-                <div
-                  className="h-full bg-neutral-600 transition-all"
-                  style={{ width: `${bassLvl * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* MIDI */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold uppercase tracking-wider">MIDI</label>
-            <button
-              onClick={() => setMidiOn(!midiOn)}
-              className={`p-1.5 rounded ${midiOn ? "bg-black text-white" : "bg-neutral-200"}`}
-            >
-              {midiOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-            </button>
-          </div>
-          {midiOn && midiDevs.length > 0 && <div className="text-xs text-neutral-600">{midiDevs.length} device(s)</div>}
-        </div>
-
-        {/* Distortion */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold uppercase tracking-wider">Distortion</label>
-            <button
-              onClick={() => setS((p) => ({ ...p, distOn: !p.distOn }))}
-              className={`p-1.5 rounded ${s.distOn ? "bg-black text-white" : "bg-neutral-200"}`}
-            >
-              {s.distOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-            </button>
-          </div>
-
-          {s.distOn && (
-            <>
-              <select
-                value={s.distType}
-                onChange={(e) => setS((p) => ({ ...p, distType: e.target.value }))}
-                className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-              >
-                <option value="liquify">Liquify Flow</option>
-                <option value="ripple">Ripple Waves</option>
-                <option value="swirl">Swirl Vortex</option>
-              </select>
-              <label className="block text-xs font-semibold uppercase tracking-wider">
-                Strength: {s.distStr}
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="200"
-                value={s.distStr}
-                onChange={(e) => setS((p) => ({ ...p, distStr: parseInt(e.target.value) }))}
-                className="w-full"
-              />
-              <label className="block text-xs font-semibold uppercase tracking-wider">
-                Speed: {s.distSpd}×
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="10"
-                step="0.1"
-                value={s.distSpd}
-                onChange={(e) => setS((p) => ({ ...p, distSpd: parseFloat(e.target.value) }))}
-                className="w-full"
-              />
-            </>
-          )}
-        </div>
-
-        {/* Color sequence */}
-        {interactive && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold uppercase tracking-wider flex items-center gap-2">
-                <Palette size={14} /> Color String
-              </label>
-              <button
-                onClick={() => setS((p) => ({ ...p, colorSeqOn: !p.colorSeqOn }))}
-                className={`p-1.5 rounded ${s.colorSeqOn ? "bg-black text-white" : "bg-neutral-200"}`}
-              >
-                {s.colorSeqOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-5 gap-2">
-              {s.colorSeq.map((col, i) => (
-                <input
-                  key={i}
-                  type="color"
-                  value={col}
-                  onChange={(e) =>
-                    setS((p) => {
-                      const next = [...p.colorSeq];
-                      next[i] = e.target.value;
-                      return { ...p, colorSeq: next };
-                    })
-                  }
-                  className="h-9 w-full rounded-md border border-neutral-300 bg-white"
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Paint + Image */}
-        {interactive && (
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold uppercase tracking-wider">Cell Color / Image</label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPaint((p) => ({ ...p, mode: p.mode === "color" ? "none" : "color" }))}
-                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 min-h-[44px] ${
-                  paint.mode === "color" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
-                }`}
-              >
-                <Wand2 size={14} />
-                Paint
-              </button>
-              <button
-                onClick={() =>
-                  setPaint((p) => ({
-                    ...p,
-                    mode: p.mode === "sample" ? "none" : "sample",
-                    useSeq: false,
-                  }))
-                }
-                className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-2 min-h-[44px] ${
-                  paint.mode === "sample" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
-                }`}
-                disabled={!imageInfo.loaded}
-              >
-                <ImageIcon size={14} />
-                Sample
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between gap-2">
-              <input
-                type="color"
-                value={paint.color}
-                onChange={(e) => setPaint((p) => ({ ...p, color: e.target.value, useSeq: false }))}
-                className="h-10 w-14 rounded-md border border-neutral-300 bg-white"
-              />
-              <div className="flex-1">
-                <div className="text-xs text-neutral-600">Paint</div>
-                <div className="font-mono text-xs">{paint.useSeq ? "(color string)" : paint.color}</div>
-              </div>
-              <select
-                value={s.fillAs}
-                onChange={(e) => setS((p) => ({ ...p, fillAs: e.target.value }))}
-                className="px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-              >
-                <option value="background">Background</option>
-                <option value="ink">Ink</option>
-              </select>
-            </div>
-
-            <button
-              onClick={() => setPaint((p) => ({ ...p, useSeq: !p.useSeq, mode: "color" }))}
-              className={`w-full px-3 py-2 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 min-h-[44px] ${
-                paint.useSeq ? "bg-black text-white border-black" : "bg-white border-neutral-300"
-              }`}
-            >
-              <Palette size={14} />
-              Paint with Color String
-            </button>
-
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-neutral-700 font-medium flex items-center gap-2">
-                  <ImageIcon size={14} /> Upload image
-                </div>
-                {imageInfo.loaded && <div className="text-[10px] text-green-700">✓ {imageInfo.name}</div>}
-              </div>
-              <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs" />
-              <div className="mt-2 space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold uppercase tracking-wider">Image Preview</label>
-                  <button
-                    onClick={() => setS((p) => ({ ...p, imgPreviewOn: !p.imgPreviewOn }))}
-                    className={`p-1.5 rounded ${s.imgPreviewOn ? "bg-black text-white" : "bg-neutral-200"}`}
-                  >
-                    {s.imgPreviewOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-                  </button>
-                </div>
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Opacity: {Math.round((s.imgPreviewAlpha ?? 0.15) * 100)}%
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="0.6"
-                  step="0.01"
-                  value={s.imgPreviewAlpha ?? 0.15}
-                  onChange={(e) => setS((p) => ({ ...p, imgPreviewAlpha: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
-              </div>
-            </div>
-
-            {/* Image String */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold uppercase tracking-wider flex items-center gap-2">
-                  <ImageIcon size={14} /> Image String
-                </label>
-                <button
-                  onClick={() => setS((p) => ({ ...p, imgSeqOn: !p.imgSeqOn }))}
-                  className={`p-1.5 rounded ${s.imgSeqOn ? "bg-black text-white" : "bg-neutral-200"}`}
-                  disabled={imageSeqReadyCount === 0}
-                >
-                  {s.imgSeqOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-                </button>
-              </div>
-
-              <div className="grid grid-cols-5 gap-2">
-                {imgSeqInfo.map((slot, i) => (
-                  <div key={i} className="space-y-1">
-                    <div className="h-9 w-full rounded-md border border-neutral-300 bg-white flex items-center justify-center">
-                      <span className={`text-[10px] ${slot.loaded ? "text-green-700" : "text-neutral-500"}`}>
-                        {slot.loaded ? "✓" : i + 1}
-                      </span>
-                    </div>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleImageSeqUpload(i, e.target.files?.[0])}
-                      className="w-full text-[10px]"
-                    />
-                    {slot.loaded && (
-                      <button
-                        onClick={() => clearImageSeqSlot(i)}
-                        className="w-full text-[10px] text-red-600 hover:underline"
-                      >
-                        remove
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <div className="text-xs text-neutral-600">Behavior</div>
-                  <select
-                    value={s.imgSeqBehave}
-                    onChange={(e) => setS((p) => ({ ...p, imgSeqBehave: e.target.value }))}
-                    className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                  >
-                    <option value="same">Same as letters</option>
-                    <option value="cycle">Cycle</option>
-                    <option value="wave">Wave</option>
-                    <option value="random">Random</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-xs text-neutral-600">Speed</div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="4"
-                    step="0.05"
-                    value={s.imgSeqSpeed}
-                    onChange={(e) => setS((p) => ({ ...p, imgSeqSpeed: parseFloat(e.target.value) }))}
-                    className="w-full"
-                  />
-                </div>
-              </div>
-
-              <button
-                onClick={() =>
-                  setPaint((p) => ({ ...p, mode: p.mode === "imgseq" ? "none" : "imgseq", useSeq: false }))
-                }
-                className={`w-full px-3 py-2 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 min-h-[44px] ${
-                  paint.mode === "imgseq" ? "bg-black text-white border-black" : "bg-white border-neutral-300"
-                }`}
-                disabled={imageSeqReadyCount === 0}
-              >
-                <ImageIcon size={14} /> Paint with Image String
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* String behavior */}
-        {interactive && (
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold uppercase tracking-wider">String Behavior</label>
-            <select
-              value={s.strBehave}
-              onChange={(e) => setS((p) => ({ ...p, strBehave: e.target.value }))}
-              className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"
-            >
-              <option value="cycle">Cycle</option>
-              <option value="wave">Wave</option>
-              <option value="random">Random</option>
-              <option value="squeeze">Squeeze (String %)</option>
-            </select>
-
-            {s.strBehave === "squeeze" && (
-              <>
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Squeeze Amount: {s.squeezeAmt.toFixed(2)}
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="0.98"
-                  step="0.01"
-                  value={s.squeezeAmt}
-                  onChange={(e) => setS((p) => ({ ...p, squeezeAmt: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Squeeze Speed: {s.squeezeSpd.toFixed(2)}
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="6"
-                  step="0.05"
-                  value={s.squeezeSpd}
-                  onChange={(e) => setS((p) => ({ ...p, squeezeSpd: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Flow Speed: {s.squeezeFlow.toFixed(2)}
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="6"
-                  step="0.05"
-                  value={s.squeezeFlow}
-                  onChange={(e) => setS((p) => ({ ...p, squeezeFlow: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Density: {s.squeezeDensity.toFixed(2)}
-                </label>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="2"
-                  step="0.01"
-                  value={s.squeezeDensity}
-                  onChange={(e) => setS((p) => ({ ...p, squeezeDensity: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
-              </>
-            )}
-
-            <label className="block text-xs font-semibold uppercase tracking-wider">Characters</label>
-            <input
-              type="text"
-              value={s.chars}
-              onChange={(e) => setS((p) => ({ ...p, chars: e.target.value }))}
-              className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono"
-            />
-          </div>
-        )}
-
-        {/* ✅ Span Text UI (mask fill mode) */}
-        {interactive && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold uppercase tracking-wider">Span Text</label>
-              <button
-                onClick={() => setS((p) => ({ ...p, spanOn: !p.spanOn }))}
-                className={`p-1.5 rounded ${s.spanOn ? "bg-black text-white" : "bg-neutral-200"}`}
-              >
-                {s.spanOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-              </button>
-            </div>
-
-            {s.spanOn && (
-              <>
-                <input
-                  type="text"
-                  value={s.spanText}
-                  onChange={(e) => setS((p) => ({ ...p, spanText: e.target.value }))}
-                  className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg font-mono"
-                />
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <div className="text-xs text-neutral-600">Row</div>
-                    <input
-                      type="number"
-                      value={s.spanRow}
-                      min={0}
-                      onChange={(e) => setS((p) => ({ ...p, spanRow: parseInt(e.target.value || "0") }))}
-                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs text-neutral-600">Col</div>
-                    <input
-                      type="number"
-                      value={s.spanCol}
-                      min={0}
-                      onChange={(e) => setS((p) => ({ ...p, spanCol: parseInt(e.target.value || "0") }))}
-                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <div className="text-xs text-neutral-600">Cols</div>
-                    <input
-                      type="number"
-                      value={s.spanCols}
-                      min={1}
-                      onChange={(e) => setS((p) => ({ ...p, spanCols: parseInt(e.target.value || "1") }))}
-                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs text-neutral-600">Rows</div>
-                    <input
-                      type="number"
-                      value={s.spanRows}
-                      min={1}
-                      onChange={(e) => setS((p) => ({ ...p, spanRows: parseInt(e.target.value || "1") }))}
-                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <div className="text-xs text-neutral-600">Align</div>
-                    <select
-                      value={s.spanAlign}
-                      onChange={(e) => setS((p) => ({ ...p, spanAlign: e.target.value }))}
-                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                    >
-                      <option value="left">Left</option>
-                      <option value="center">Center</option>
-                    </select>
-                  </div>
-                  <div>
-                    <div className="text-xs text-neutral-600">Mode</div>
-                    <select
-                      value={s.spanFillOn ? "fill" : "draw"}
-                      onChange={(e) => setS((p) => ({ ...p, spanFillOn: e.target.value === "fill" }))}
-                      className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                    >
-                      <option value="fill">Fill cells</option>
-                      <option value="draw">Draw text</option>
-                    </select>
-                  </div>
-                </div>
-
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Font Scale: {s.spanFontScale.toFixed(2)}
-                </label>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="2"
-                  step="0.01"
-                  value={s.spanFontScale}
-                  onChange={(e) => setS((p) => ({ ...p, spanFontScale: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
-
-                <label className="block text-xs font-semibold uppercase tracking-wider">
-                  Tracking: {s.spanTracking}px
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="20"
-                  step="1"
-                  value={s.spanTracking}
-                  onChange={(e) => setS((p) => ({ ...p, spanTracking: parseInt(e.target.value) }))}
-                  className="w-full"
-                />
-
-                {s.spanFillOn && (
-                  <div className="rounded-lg border border-neutral-200 bg-white p-3 space-y-2">
-                    <label className="block text-xs font-semibold uppercase tracking-wider">Fill Color</label>
-                    <input
-                      type="color"
-                      value={s.spanFillColor}
-                      onChange={(e) => setS((p) => ({ ...p, spanFillColor: e.target.value }))}
-                      className="h-10 w-full rounded-md border border-neutral-300 bg-white"
-                    />
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Coverage Threshold: {(s.spanFillThreshold ?? 0.18).toFixed(2)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0.02"
-                      max="0.6"
-                      step="0.01"
-                      value={s.spanFillThreshold ?? 0.18}
-                      onChange={(e) => setS((p) => ({ ...p, spanFillThreshold: parseFloat(e.target.value) }))}
-                      className="w-full"
-                    />
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Mask Quality: {s.spanMaskScale ?? 2}×
-                    </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="4"
-                      step="1"
-                      value={s.spanMaskScale ?? 2}
-                      onChange={(e) => setS((p) => ({ ...p, spanMaskScale: parseInt(e.target.value) }))}
-                      className="w-full"
-                    />
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Swiss-grid controls */}
-        {s.pat === "swiss-grid" && (
-          <>
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">
-                Grid {s.cols} × {s.rows}
-              </label>
-              <input
-                type="range"
-                min="4"
-                max="40"
-                value={s.cols}
-                onChange={(e) => setS((p) => ({ ...p, cols: parseInt(e.target.value) }))}
-                className="w-full"
-              />
-              <input
-                type="range"
-                min="4"
-                max="40"
-                value={s.rows}
-                onChange={(e) => setS((p) => ({ ...p, rows: parseInt(e.target.value) }))}
-                className="w-full"
-              />
-            </div>
-
-            {/* Variable Density UI */}
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">Variable Grid Density</label>
-
-              <div className="rounded-lg border border-neutral-200 bg-white p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold uppercase tracking-wider">Columns (vertical)</div>
-                  <button
-                    onClick={() => setS((p) => ({ ...p, varColsOn: !p.varColsOn }))}
-                    className={`p-1.5 rounded ${s.varColsOn ? "bg-black text-white" : "bg-neutral-200"}`}
-                  >
-                    {s.varColsOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-                  </button>
-                </div>
-                {s.varColsOn && (
-                  <>
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Focus X: {s.colFocus.toFixed(2)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={s.colFocus}
-                      onChange={(e) => setS((p) => ({ ...p, colFocus: parseFloat(e.target.value) }))}
-                      className="w-full"
-                    />
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Strength: {s.colStrength.toFixed(1)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="20"
-                      step="0.1"
-                      value={s.colStrength}
-                      onChange={(e) => setS((p) => ({ ...p, colStrength: parseFloat(e.target.value) }))}
-                      className="w-full"
-                    />
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Band Width: {s.colSigma.toFixed(2)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0.05"
-                      max="0.5"
-                      step="0.01"
-                      value={s.colSigma}
-                      onChange={(e) => setS((p) => ({ ...p, colSigma: parseFloat(e.target.value) }))}
-                      className="w-full"
-                    />
-                  </>
-                )}
-              </div>
-
-              <div className="rounded-lg border border-neutral-200 bg-white p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold uppercase tracking-wider">Rows (horizontal)</div>
-                  <button
-                    onClick={() => setS((p) => ({ ...p, varRowsOn: !p.varRowsOn }))}
-                    className={`p-1.5 rounded ${s.varRowsOn ? "bg-black text-white" : "bg-neutral-200"}`}
-                  >
-                    {s.varRowsOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-                  </button>
-                </div>
-                {s.varRowsOn && (
-                  <>
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Focus Y: {s.rowFocus.toFixed(2)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={s.rowFocus}
-                      onChange={(e) => setS((p) => ({ ...p, rowFocus: parseFloat(e.target.value) }))}
-                      className="w-full"
-                    />
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Strength: {s.rowStrength.toFixed(1)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="20"
-                      step="0.1"
-                      value={s.rowStrength}
-                      onChange={(e) => setS((p) => ({ ...p, rowStrength: parseFloat(e.target.value) }))}
-                      className="w-full"
-                    />
-                    <label className="block text-xs font-semibold uppercase tracking-wider">
-                      Band Width: {s.rowSigma.toFixed(2)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0.05"
-                      max="0.5"
-                      step="0.01"
-                      value={s.rowSigma}
-                      onChange={(e) => setS((p) => ({ ...p, rowSigma: parseFloat(e.target.value) }))}
-                      className="w-full"
-                    />
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">Draw Element</label>
-              <select
-                value={s.selEl}
-                onChange={(e) => setS((p) => ({ ...p, selEl: e.target.value }))}
-                className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"
-              >
-                <option value="char">Character</option>
-                <option value="dot">Dot</option>
-                <option value="square">Square</option>
-                <option value="svg">SVG</option>
-              </select>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold uppercase tracking-wider">Draw Mode</label>
-              <button
-                onClick={() => setS((p) => ({ ...p, draw: !p.draw }))}
-                className={`p-1.5 rounded ${s.draw ? "bg-black text-white" : "bg-neutral-200"}`}
-              >
-                {s.draw ? <Play size={14} fill="white" /> : <Square size={14} />}
-              </button>
-            </div>
-
-            <button
-              onClick={() => setCells([])}
-              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black min-h-[44px]"
-            >
-              Clear
-            </button>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">Behavior</label>
-              <select
-                value={s.behave}
-                onChange={(e) => setS((p) => ({ ...p, behave: e.target.value }))}
-                className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg"
-              >
-                <optgroup label="String Physics">
-                  <option value="string-wave">String Wave</option>
-                  <option value="string-pendulum">String Pendulum</option>
-                  <option value="string-elastic">String Elastic</option>
-                </optgroup>
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">Google Font</label>
-              <select
-                value={s.googleFont}
-                onChange={(e) => setS((p) => ({ ...p, googleFont: e.target.value }))}
-                className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-              >
-                <option value="Inter">Inter</option>
-                <option value="Roboto Mono">Roboto Mono</option>
-                <option value="Space Mono">Space Mono</option>
-                <option value="JetBrains Mono">JetBrains Mono</option>
-                <option value="Fira Code">Fira Code</option>
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">Custom Font (.ttf/.otf)</label>
-              <input type="file" accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} className="w-full text-xs" />
-              {s.customFont && <div className="text-xs text-green-600">✓ Custom font loaded</div>}
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider">Upload SVG Shape</label>
-              <input type="file" accept=".svg" onChange={handleSvgUpload} className="w-full text-xs" />
-              {svgPath && <div className="text-xs text-green-600">✓ SVG loaded</div>}
-            </div>
-          </>
-        )}
-
-        {/* Char-grid controls */}
-        {s.pat === "char-grid" && (
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold uppercase tracking-wider">Char Size: {s.charSz}px</label>
-            <input
-              type="range"
-              min="8"
-              max="80"
-              value={s.charSz}
-              onChange={(e) => setS((p) => ({ ...p, charSz: parseInt(e.target.value) }))}
-              className="w-full"
-            />
-            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
-            <input
-              type="range"
-              min="10"
-              max="200"
-              value={s.space}
-              onChange={(e) => setS((p) => ({ ...p, space: parseInt(e.target.value) }))}
-              className="w-full"
-            />
-            <label className="block text-xs font-semibold uppercase tracking-wider">
-              Speed: {s.charSpd.toFixed(2)}×
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="10"
-              step="0.1"
-              value={s.charSpd}
-              onChange={(e) => setS((p) => ({ ...p, charSpd: parseFloat(e.target.value) }))}
-              className="w-full"
-            />
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold uppercase tracking-wider">Draw Mode</label>
-              <button
-                onClick={() => setS((p) => ({ ...p, draw: !p.draw }))}
-                className={`p-1.5 rounded ${s.draw ? "bg-black text-white" : "bg-neutral-200"}`}
-              >
-                {s.draw ? <Play size={14} fill="white" /> : <Square size={14} />}
-              </button>
-            </div>
-
-            <button
-              onClick={() => setCells([])}
-              className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black min-h-[44px]"
-            >
-              Clear Painted Cells
-            </button>
-          </div>
-        )}
-
-        {/* Global sensitivity */}
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wider">Audio Sensitivity: {s.audioSens}</label>
-          <input
-            type="range"
-            min="0"
-            max="10"
-            step="0.1"
-            value={s.audioSens}
-            onChange={(e) => setS((p) => ({ ...p, audioSens: parseFloat(e.target.value) }))}
-            className="w-full"
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wider">MIDI Sensitivity: {s.midiSens}</label>
-          <input
-            type="range"
-            min="0"
-            max="10"
-            step="0.1"
-            value={s.midiSens}
-            onChange={(e) => setS((p) => ({ ...p, midiSens: parseFloat(e.target.value) }))}
-            className="w-full"
-          />
-        </div>
-      </div>
-
-      {/* Canvas */}
-      <div className="flex-1 min-h-0 p-2 md:p-8 bg-white relative">
-        <button
-          onClick={() => setPanelOpen((v) => !v)}
-          className="md:hidden absolute top-3 left-3 z-20 px-3 py-2 rounded-lg bg-black text-white text-xs font-semibold shadow"
-        >
-          {panelOpen ? "Hide controls" : "Show controls"}
-        </button>
-
-        <canvas
-          ref={canvasRef}
-          className="w-full h-full rounded-lg shadow-sm touch-none"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}
-          onPointerCancel={onPointerUp}
-          onContextMenu={(e) => e.preventDefault()}
-        />
-
-        {menu && (
-          <div
-            className="fixed bg-white shadow-2xl rounded-lg border py-1 z-50"
-            style={{ left: menu.x, top: menu.y }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button onClick={() => add("char")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
-              Add Char
-            </button>
-            <button onClick={() => add("dot")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
-              Add Dot
-            </button>
-            <button onClick={() => add("square")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
-              Add Square
-            </button>
-            <button onClick={() => add("svg")} className="block w-full px-4 py-2 text-left hover:bg-gray-100 text-sm">
-              Add SVG
-            </button>
-            <div className="border-t my-1"></div>
-            <button onClick={rem} className="block w-full px-4 py-2 text-left hover:bg-red-50 text-sm text-red-600">
-              Remove
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+        if (s.fillAs === "ink" && fillCol) ctx.fillStyle = fil
