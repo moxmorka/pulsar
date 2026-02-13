@@ -1314,6 +1314,20 @@ export default function App() {
     const aud = smoothAudioRef.current * s.audioSens;
     const bass = smoothBassRef.current * s.audioSens;
 
+    // ===== STRUCTURAL AUDIO REACTION =====
+const energy = clamp((aud * 0.6 + bass * 0.8 + midi * 0.5), 0, 1);
+
+// How many columns/rows become active
+const activeCols = Math.floor(s.cols * energy);
+const activeRows = Math.floor(s.rows * energy);
+
+// Flowing band animation
+const flowPhase = Math.floor((tm * 0.002) % s.cols);
+
+// Toggle for structural mode (can move to UI later)
+const structuralMode = true;
+
+
     const distSpd = getSpeedFactor(s.distSpd);
     const charSpd = getSpeedFactor(s.charSpd);
     const at = tm * 0.001 * distSpd;
@@ -1609,6 +1623,19 @@ export default function App() {
       if (s.swissBaseOn && chs.length > 0) {
         for (let r = 0; r < s.rows; r++) {
           for (let c = 0; c < s.cols; c++) {
+            // ===== STRUCTURAL FILTERING =====
+if (structuralMode) {
+
+  // MODE A — grow from left
+  if (c > activeCols) continue;
+
+  // MODE B — grow from bottom
+  if (r < s.rows - activeRows) continue;
+
+  // MODE C — flowing vertical band
+  if (Math.abs(c - flowPhase) > Math.max(1, activeCols * 0.5)) continue;
+}
+
             const idxLinear = r * s.cols + c;
             const entry = cellByIdx.get(idxLinear);
 
@@ -1617,6 +1644,19 @@ export default function App() {
             if (hasOverlay) continue;
 
             const g = swissCellGeom(r, c, w, h);
+            // ===== STRUCTURAL SCALING =====
+const dynamicScale = 1 + energy * 0.4;
+
+const scaledW = g.w * dynamicScale;
+const scaledH = g.h * dynamicScale;
+
+g.x -= (scaledW - g.w) / 2;
+g.y -= (scaledH - g.h) / 2;
+g.w = scaledW;
+g.h = scaledH;
+g.cx = g.x + g.w / 2;
+g.cy = g.y + g.h / 2;
+
             const st = ct + (r + c) * s.stagger;
 
             const fillCol = resolveFillColor({ paintObj: entry?.paint, st, r, c });
@@ -1686,7 +1726,12 @@ export default function App() {
               ctx.translate(g.cx, g.cy);
               if (gr !== 0) ctx.rotate(gr);
               ctx.scale(1 + ease((bass + midi) * 0.3), 1 + ease((bass + midi) * 0.3));
-              ctx.fillText(chs[gi], 0, 0);
+             if (energy > 0.15) {
+  ctx.fillRect(g.x, g.y, g.w, g.h);
+} else {
+  ctx.fillText(chs[gi], 0, 0);
+}
+
               ctx.restore();
             }
           }
