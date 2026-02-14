@@ -172,7 +172,7 @@ function makeVoice(ac) {
   return { osc, filter, gain };
 }
 
-function triggerVoice(ac, voice, { freq, vel, cutoffHz, decaySec }) {
+function triggerVoice(ac, voice, { freq, vel, cutoffHz, attack, decaySec, release }) {
   const now = ac.currentTime;
   const v = clamp(vel, 0.0001, 1);
 
@@ -181,9 +181,11 @@ function triggerVoice(ac, voice, { freq, vel, cutoffHz, decaySec }) {
   voice.filter.frequency.cancelScheduledValues(now);
   voice.filter.frequency.setValueAtTime(clamp(cutoffHz, 80, 16000), now);
 
-  voice.gain.gain.cancelScheduledValues(now);
-  voice.gain.gain.setValueAtTime(Math.max(0.0001, v), now);
-  voice.gain.gain.exponentialRampToValueAtTime(0.0001, now + clamp(decaySec, 0.02, 2.0));
+  const g = voice.gain.gain;
+  g.cancelScheduledValues(now);
+  g.setValueAtTime(0.0001, now);
+  g.exponentialRampToValueAtTime(v, now + attack);
+  g.exponentialRampToValueAtTime(0.0001, now + attack + decaySec + release);
 }
 
 /* =======================
@@ -808,22 +810,28 @@ export default function App() {
         // filter: luminance + slight row brightness
         const cutoff = (st.cutoffBase ?? 400) + (st.cutoffSpan ?? 7200) * clamp(0.2 + 0.8 * lum, 0, 1);
 
-        // decay: variable row density affects tail if varRowsOn
-        let decay = (st.decayBase ?? 0.1) + (st.decaySpan ?? 0.55) * clamp(lum, 0, 1);
-        if (isSwiss && st.varRowsOn) {
-          // compute row height ratio to shape decay
-          const re =
-            rowEdges ||
-            (st.rows
-              ? Array.from({ length: st.rows + 1 }, (_, i) => i / st.rows)
-              : Array.from({ length: rows + 1 }, (_, i) => i / rows));
-          const rh = re[r + 1] - re[r];
-          const avg = 1 / rows;
-          const ratio = clamp(rh / avg, 0.4, 2.2);
-          // taller row => longer decay; denser (short) => shorter decay
-          decay *= clamp(ratio, 0.6, 1.6);
-        }
-        decay = clamp(decay, 0.03, 1.2);
+       
+        // =============================
+         // ROW → Envelope / Tail control
+         // =============================
+         const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
+         
+         // Decay scales by row height
+         let decay = (st.decayBase ?? 0.1) +
+            (st.decaySpan ?? 0.55) *
+            clamp(lum * (0.5 + rowNorm * 0.5), 0, 1);
+         
+         // Attack: higher rows = sharper attack
+         const attack = 0.005 + 0.08 * (1 - rowNorm);  
+         // Release: lower rows = longer release
+         const release = 0.05 + 0.5 * rowNorm;
+         // Filter brightness by row
+         const cutoff =
+            (st.cutoffBase ?? 400) +
+            (st.cutoffSpan ?? 7200) *
+            clamp(0.3 + rowNorm * 0.7, 0, 1);
+
+         decay = clamp(decay, 0.03, 1.5);
 
         // priority: stronger notes win; also add tiny bonus for higher rows
         const score = vel + rowNorm * 0.08;
@@ -840,7 +848,15 @@ export default function App() {
       for (const h of chosen) {
         const v = pool[audioRef.current.voicePtr % pool.length];
         audioRef.current.voicePtr++;
-        triggerVoice(ac, v, { freq: h.freq, vel: h.vel, cutoffHz: h.cutoff, decaySec: h.decay });
+       triggerVoice(ac, v, {
+          freq: h.freq,
+          vel: h.vel,
+          cutoffHz: h.cutoff,
+          attack: attack,
+          decaySec: decay,
+          release: release
+});
+
       }
 
       audioRef.current.step++;
