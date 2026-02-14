@@ -428,7 +428,8 @@ export default function App() {
     }
   };
 
-  const onPointerDown = (e) => {
+  const onPointerDown = async (e) => {
+  await unlockAudio();
     e.preventDefault?.();
     try {
       e.currentTarget?.setPointerCapture?.(e.pointerId);
@@ -583,6 +584,15 @@ export default function App() {
     }
     return A;
   }
+   async function unlockAudio() {
+  const A = ensureAudio();
+  if (A.ac && A.ac.state === "suspended") {
+    try {
+      await A.ac.resume();
+    } catch (e) {}
+  }
+}
+
 
   function updateAudioParamsRealtime() {
     const A = audioRef.current;
@@ -649,11 +659,12 @@ export default function App() {
 
   // keep audio params hot while UI changes
   React.useEffect(() => {
-    ensureAudio();
+  if (audioRef.current.ac) {
     ensureVoices();
     updateAudioParamsRealtime();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s]);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [s]);
 
   /* =======================
      Scheduler (stable)
