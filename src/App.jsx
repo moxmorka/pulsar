@@ -6,14 +6,9 @@ import { RotateCcw, Download, Play, Square, Palette } from "lucide-react";
    Utilities
 ======================= */
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const lerp = (a, b, t) => a + (b - a) * t;
 
 function isHexColor(s) {
   return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s);
-}
-function hexFromRgb(r, g, b) {
-  const to2 = (n) => n.toString(16).padStart(2, "0");
-  return `#${to2(r)}${to2(g)}${to2(b)}`;
 }
 function hexToRgb(hex) {
   if (!hex) return null;
@@ -27,7 +22,6 @@ function luminance01({ r, g, b }) {
   return clamp((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255, 0, 1);
 }
 function hue01({ r, g, b }) {
-  // returns 0..1 hue
   const rr = r / 255,
     gg = g / 255,
     bb = b / 255;
@@ -122,8 +116,6 @@ function buildScaleMidi({ rootPc, scaleName, baseMidi, degreesCount }) {
 }
 
 function degreeToChordTones(scaleMidi, degreeIndex, chordType = "7") {
-  // degreeIndex in scale degrees: 0..(scaleLen-1)
-  // build chord tones by stacking thirds in the scale (diatonic)
   const steps = chordType === "triad" ? [0, 2, 4] : [0, 2, 4, 6];
   const tones = [];
   for (const st of steps) {
@@ -135,9 +127,6 @@ function degreeToChordTones(scaleMidi, degreeIndex, chordType = "7") {
 
 /* =======================
    Sound engine w/ FX
-   - single AudioContext
-   - never rebuild graph on paint
-   - realtime param updates via AudioParams
 ======================= */
 function createReverbImpulse(ac, seconds = 2.2, decay = 2.0) {
   const rate = ac.sampleRate;
@@ -161,14 +150,14 @@ function makeVoice(ac) {
 
   osc.type = "sawtooth";
   filter.type = "lowpass";
-  filter.Q.value = 0.65;
+  filter.Q.value = 0.7;
 
   gain.gain.value = 0.0001;
 
   osc.connect(filter);
   filter.connect(gain);
-
   osc.start();
+
   return { osc, filter, gain };
 }
 
@@ -179,13 +168,18 @@ function triggerVoice(ac, voice, { freq, vel, cutoffHz, attack, decaySec, releas
   voice.osc.frequency.setValueAtTime(freq, now);
 
   voice.filter.frequency.cancelScheduledValues(now);
-  voice.filter.frequency.setValueAtTime(clamp(cutoffHz, 80, 16000), now);
+  voice.filter.frequency.setValueAtTime(clamp(cutoffHz, 120, 18000), now);
 
   const g = voice.gain.gain;
   g.cancelScheduledValues(now);
   g.setValueAtTime(0.0001, now);
-  g.exponentialRampToValueAtTime(v, now + attack);
-  g.exponentialRampToValueAtTime(0.0001, now + attack + decaySec + release);
+
+  const a = clamp(attack ?? 0.01, 0.002, 0.25);
+  const d = clamp(decaySec ?? 0.2, 0.02, 4.0);
+  const r = clamp(release ?? 0.15, 0.02, 6.0);
+
+  g.exponentialRampToValueAtTime(v, now + a);
+  g.exponentialRampToValueAtTime(0.0001, now + a + d + r);
 }
 
 /* =======================
@@ -195,7 +189,6 @@ export default function App() {
   const canvasRef = React.useRef(null);
   const rafRef = React.useRef(null);
 
-  // cells are stored in state (for UI) AND in a ref for the audio scheduler (no re-start)
   const [cells, setCells] = React.useState([]);
   const cellsRef = React.useRef([]);
   React.useEffect(() => {
@@ -204,15 +197,13 @@ export default function App() {
 
   const [panelOpen, setPanelOpen] = React.useState(false);
 
-  // painting
   const [paint, setPaint] = React.useState({
-    mode: "color", // color | seq | none
+    mode: "color",
     color: "#111111",
     useSeq: true,
   });
   const [drawing, setDrawing] = React.useState(false);
 
-  // settings (visual + sound)
   const [s, setS] = React.useState({
     pat: "swiss-grid", // swiss-grid | char-grid
 
@@ -227,7 +218,6 @@ export default function App() {
     rows: 16,
     gridLines: true,
     swissCharScale: 1.0,
-    stagger: 0.08,
 
     // variable density
     varColsOn: false,
@@ -241,38 +231,43 @@ export default function App() {
     rowSigma: 0.18,
 
     // color string
-    colorSeqOn: true,
     colorSeq: ["#111111", "#ff0055", "#00c2ff", "#00ff88", "#ffe600"],
     colorSeqSpeed: 1.0,
     colorSeqBehave: "same", // same | cycle | wave | random
 
-    // ======= SOUND (always in key) =======
+    // ===== SOUND =====
     soundOn: true,
-
-    // timing
     bpm: 120,
-    maxNotesPerStep: 8,
+    maxNotesPerStep: 10, // bump default a bit for dense grids
 
     // harmony
-    keyRoot: 0, // 0=C
+    keyRoot: 0,
     scaleName: "naturalMinor",
-    baseMidi: 36, // C2-ish
-    octaveSpan: 4, // number of octaves across rows
-    chordType: "7", // triad | 7
-    // progression in scale degrees (0=I, 5=VI, etc). defaults: minor-ish loop
+    baseMidi: 42, // slightly higher so bottom rows are clearly audible
+    octaveSpan: 4,
+    chordType: "7",
     prog: [0, 5, 3, 6],
-    progRate: 4, // how many columns per chord
+    progRate: 4,
 
     // mapping
-    laneMode: "column", // column | hue
-    velFrom: "luma", // luma | fixed
-    cutoffBase: 400,
-    cutoffSpan: 7200,
-    decayBase: 0.10,
-    decaySpan: 0.55,
+    laneMode: "hue", // hue tends to sound more “paint-controlled”
+    velFrom: "luma",
 
-    // voice pool
-    voices: 12,
+    cutoffBase: 500,
+    cutoffSpan: 8000,
+
+    // envelope base (rows will mod these)
+    attackBase: 0.01,
+    attackSpan: 0.10,
+    decayBase: 0.08,
+    decaySpan: 0.90,
+    releaseBase: 0.08,
+    releaseSpan: 1.40,
+
+    // dense-grid note selection: if you want bottom to win, set this to "low"
+    priorityBias: "none", // none | high | low
+
+    voices: 14,
 
     // FX
     master: 0.85,
@@ -286,12 +281,10 @@ export default function App() {
     delayTime: 0.28,
     delayFeedback: 0.35,
 
-    // gentle saturation
     driveOn: true,
     drive: 0.6,
   });
 
-  // settings ref for scheduler (no interval restart when sliders change)
   const sRef = React.useRef(s);
   React.useEffect(() => {
     sRef.current = s;
@@ -316,7 +309,6 @@ export default function App() {
         const wv = Math.sin((c * 0.5 + r * 0.33 + tt) * 0.8);
         return Math.floor((wv + 1) * 0.5 * len) % len;
       }
-      // random-ish but deterministic
       const sd = r * 1000 + c + Math.floor(tt * 2);
       return Math.floor((Math.sin(sd) * 0.5 + 0.5) * len) % len;
     },
@@ -337,6 +329,14 @@ export default function App() {
       ? buildVariableEdges(s.rows, s.rowFocus, s.rowStrength, s.rowSigma)
       : Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
   }, [s.pat, s.rows, s.varRowsOn, s.rowFocus, s.rowStrength, s.rowSigma]);
+
+  // IMPORTANT: scheduler must read *latest* edges
+  const colEdgesRef = React.useRef(null);
+  const rowEdgesRef = React.useRef(null);
+  React.useEffect(() => {
+    colEdgesRef.current = colEdges;
+    rowEdgesRef.current = rowEdges;
+  }, [colEdges, rowEdges]);
 
   function swissCellGeom(r, c, w, h) {
     const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
@@ -359,13 +359,13 @@ export default function App() {
     return { x, y };
   };
 
-  // index lookup
   const getSwissIdx = React.useCallback(
     (cx, cy) => {
       const cv = canvasRef.current;
       if (!cv) return null;
       const x01 = cx / cv.width;
       const y01 = cy / cv.height;
+
       const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
       const re = rowEdges || Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
 
@@ -401,7 +401,6 @@ export default function App() {
     [s.pat, getSwissIdx, getCharGridIdx]
   );
 
-  // upsert / remove cell paint
   const upsertCell = (idx, patch) => {
     setCells((prev) => {
       const ex = prev.findIndex((c) => c.idx === idx);
@@ -430,102 +429,39 @@ export default function App() {
     }
   };
 
-  const onPointerDown = async (e) => {
-  await unlockAudio();
-    e.preventDefault?.();
-    try {
-      e.currentTarget?.setPointerCapture?.(e.pointerId);
-    } catch {}
-    setDrawing(true);
-
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const { x, y } = pointerToCanvas(e);
-    const idx = getIdx(x, y);
-    if (idx == null) return;
-
-    if (s.pat === "swiss-grid") {
-      const col = idx % s.cols;
-      const row = Math.floor(idx / s.cols);
-      const t = performance.now() * 0.001;
-      applyPaintToIdx(idx, row, col, t);
-    } else {
-      // char-grid: approximate row/col from space
-      const col = Math.floor(x / s.space);
-      const row = Math.floor(y / s.space);
-      const t = performance.now() * 0.001;
-      applyPaintToIdx(idx, row, col, t);
-    }
-  };
-
-  const onPointerMove = (e) => {
-    if (!drawing) return;
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const { x, y } = pointerToCanvas(e);
-    const idx = getIdx(x, y);
-    if (idx == null) return;
-
-    if (s.pat === "swiss-grid") {
-      const col = idx % s.cols;
-      const row = Math.floor(idx / s.cols);
-      const t = performance.now() * 0.001;
-      applyPaintToIdx(idx, row, col, t);
-    } else {
-      const col = Math.floor(x / s.space);
-      const row = Math.floor(y / s.space);
-      const t = performance.now() * 0.001;
-      applyPaintToIdx(idx, row, col, t);
-    }
-  };
-
-  const onPointerUp = () => setDrawing(false);
-
-  // reseed helper (just randomizes nothing now, but keep button)
-  const gen = () => {
-    // could later randomize phases; currently just a no-op to preserve UI
-    setCells((p) => [...p]);
-  };
-
   /* =======================
      AUDIO GRAPH (stable)
 ======================= */
   const audioRef = React.useRef({
     ac: null,
     master: null,
-
-    // FX
     dry: null,
     wetRev: null,
     wetDel: null,
-
     convolver: null,
     delay: null,
     feedback: null,
-
     drive: null,
-
-    // voices
     voices: [],
     voicePtr: 0,
-
-    // scheduler
     running: false,
     step: 0,
     timer: null,
+    _revTime: null,
   });
 
   function ensureAudio() {
     const A = audioRef.current;
     if (!A.ac) {
       const ac = new (window.AudioContext || window.webkitAudioContext)();
+
       const master = ac.createGain();
       master.gain.value = 0.85;
 
-      // saturation
       const drive = ac.createWaveShaper();
       drive.oversample = "2x";
-      const makeCurve = (amount) => {
+
+      const setDriveCurve = (amount) => {
         const k = clamp(amount ?? 0.6, 0, 1) * 50;
         const n = 2048;
         const curve = new Float32Array(n);
@@ -533,20 +469,17 @@ export default function App() {
           const x = (i * 2) / (n - 1) - 1;
           curve[i] = Math.tanh(x * (1 + k));
         }
-        return curve;
+        drive.curve = curve;
       };
-      drive.curve = makeCurve(sRef.current.drive);
+      setDriveCurve(sRef.current.drive);
 
-      // dry/wet
       const dry = ac.createGain();
       const wetRev = ac.createGain();
       const wetDel = ac.createGain();
 
-      // reverb
       const convolver = ac.createConvolver();
       convolver.buffer = createReverbImpulse(ac, sRef.current.reverbTime, 2.0);
 
-      // delay
       const delay = ac.createDelay(2.0);
       const feedback = ac.createGain();
       feedback.gain.value = clamp(sRef.current.delayFeedback, 0, 0.95);
@@ -555,7 +488,7 @@ export default function App() {
       feedback.connect(delay);
 
       // routing:
-      // voices -> drive -> split to dry + fx -> master -> destination
+      // voices -> drive -> [dry + fx] -> master -> destination
       drive.connect(dry);
       drive.connect(convolver);
       drive.connect(delay);
@@ -578,36 +511,29 @@ export default function App() {
       A.convolver = convolver;
       A.delay = delay;
       A.feedback = feedback;
-      A.voices = [];
-      A.voicePtr = 0;
-      A.running = false;
-      A.step = 0;
-      A.timer = null;
+      A._revTime = sRef.current.reverbTime;
     }
     return A;
   }
-   async function unlockAudio() {
-  const A = ensureAudio();
-  if (A.ac && A.ac.state === "suspended") {
-    try {
-      await A.ac.resume();
-    } catch (e) {}
-  }
-}
 
+  async function unlockAudio() {
+    const A = ensureAudio();
+    if (A.ac && A.ac.state === "suspended") {
+      try {
+        await A.ac.resume();
+      } catch {}
+    }
+  }
 
   function updateAudioParamsRealtime() {
     const A = audioRef.current;
     if (!A.ac) return;
-
     const st = sRef.current;
 
-    // master
     A.master.gain.setTargetAtTime(clamp(st.master, 0, 1.2), A.ac.currentTime, 0.02);
 
-    // drive
+    // drive curve / bypass
     if (st.driveOn) {
-      // refresh curve (lightweight)
       const k = clamp(st.drive ?? 0.6, 0, 1) * 50;
       const n = 2048;
       const curve = new Float32Array(n);
@@ -617,203 +543,326 @@ export default function App() {
       }
       A.drive.curve = curve;
     } else {
-      // "bypass" by making curve ~linear
       const n = 2048;
       const curve = new Float32Array(n);
       for (let i = 0; i < n; i++) curve[i] = (i * 2) / (n - 1) - 1;
       A.drive.curve = curve;
     }
 
-    // reverb
     A.wetRev.gain.setTargetAtTime(st.reverbOn ? clamp(st.reverbMix, 0, 1) : 0, A.ac.currentTime, 0.02);
-    // only rebuild impulse when time changes notably
-    // (safe: rebuild on slider release is nicer, but we do it live with a small throttle)
-    // We'll do: if time differs by > 0.1s, rebuild
     if (A._revTime == null) A._revTime = st.reverbTime;
-    if (Math.abs(st.reverbTime - A._revTime) > 0.1) {
+    if (Math.abs(st.reverbTime - A._revTime) > 0.12) {
       A._revTime = st.reverbTime;
       A.convolver.buffer = createReverbImpulse(A.ac, clamp(st.reverbTime, 0.3, 6), 2.0);
     }
 
-    // delay
     A.wetDel.gain.setTargetAtTime(st.delayOn ? clamp(st.delayMix, 0, 1) : 0, A.ac.currentTime, 0.02);
     A.delay.delayTime.setTargetAtTime(clamp(st.delayTime, 0.01, 1.5), A.ac.currentTime, 0.02);
     A.feedback.gain.setTargetAtTime(clamp(st.delayFeedback, 0, 0.95), A.ac.currentTime, 0.02);
   }
 
-  // maintain voice pool without restarting scheduler
   function ensureVoices() {
     const A = ensureAudio();
-    const ac = A.ac;
     const want = clamp(sRef.current.voices ?? 12, 1, 32);
     if (A.voices.length !== want) {
-      // rebuild voice pool, but DO NOT touch scheduler
-      // (this won’t stop audio; existing voices keep until GC)
-      const newPool = Array.from({ length: want }, () => {
-        const v = makeVoice(ac);
+      const pool = Array.from({ length: want }, () => {
+        const v = makeVoice(A.ac);
         v.gain.connect(A.drive);
         return v;
       });
-      A.voices = newPool;
+      A.voices = pool;
       A.voicePtr = 0;
     }
   }
 
-  // keep audio params hot while UI changes
+  // Keep params hot; don't create audio until user unlocks
   React.useEffect(() => {
-  if (audioRef.current.ac) {
-    ensureVoices();
-    updateAudioParamsRealtime();
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [s]);
+    if (audioRef.current.ac) {
+      ensureVoices();
+      updateAudioParamsRealtime();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s]);
 
   /* =======================
- /* =======================
-   Scheduler (FULL FIXED)
+     Scheduler
 ======================= */
-function startScheduler() {
-  const A = ensureAudio();
-  const ac = A.ac;
-  if (ac.state === "suspended") ac.resume?.();
+  function startScheduler() {
+    const A = ensureAudio();
+    const ac = A.ac;
+    A.running = true;
 
-  A.running = true;
+    const tick = () => {
+      const AR = audioRef.current;
+      if (!AR.running) return;
 
-  const tick = () => {
-    if (!audioRef.current.running) return;
+      const st = sRef.current;
 
-    const st = sRef.current;
-    if (!st.soundOn) {
-      audioRef.current.timer = setTimeout(tick, 40);
-      return;
-    }
+      // If user turned sound off, keep clock alive but no triggers
+      if (!st.soundOn) {
+        AR.timer = setTimeout(tick, 50);
+        return;
+      }
 
-    ensureVoices();
-    updateAudioParamsRealtime();
+      // If audio is suspended, do not spam resume (browser blocks without gesture)
+      if (ac.state === "suspended") {
+        AR.timer = setTimeout(tick, 80);
+        return;
+      }
 
-    const cellsNow = cellsRef.current;
-    const map = new Map();
-    for (const c of cellsNow) map.set(c.idx, c);
+      ensureVoices();
+      updateAudioParamsRealtime();
 
-    let cols = Math.max(1, st.cols | 0);
-    let rows = Math.max(1, st.rows | 0);
+      const cellsNow = cellsRef.current;
+      const map = new Map();
+      for (const c of cellsNow) map.set(c.idx, c);
 
-    const bpm = clamp(st.bpm ?? 120, 30, 260);
-    const baseStep = 60 / bpm / 2;
+      let cols = 1,
+        rows = 1;
+      const isSwiss = st.pat === "swiss-grid";
 
-    const col = audioRef.current.step % cols;
+      if (isSwiss) {
+        cols = Math.max(1, st.cols | 0);
+        rows = Math.max(1, st.rows | 0);
+      } else {
+        const cv = canvasRef.current;
+        if (cv) {
+          cols = Math.max(1, Math.floor(cv.width / st.space));
+          rows = Math.max(1, Math.floor(cv.height / st.space));
+        } else {
+          cols = 16;
+          rows = 12;
+        }
+      }
 
-    // COLUMN → rhythm speed scaling
-    let stepSec = baseStep;
-    if (st.varColsOn && colEdges) {
-      const w = colEdges[col + 1] - colEdges[col];
-      const avg = 1 / cols;
-      const ratio = clamp(w / avg, 0.5, 2);
-      stepSec = baseStep * ratio;
-    }
+      // base step duration from BPM (8th-note feel)
+      const bpm = clamp(st.bpm ?? 120, 30, 260);
+      const baseStepSec = 60 / bpm / 2;
+      let stepSec = baseStepSec;
 
-    const prog = st.prog?.length ? st.prog : [0, 5, 3, 6];
-    const chordIndex = Math.floor(col / Math.max(1, st.progRate)) % prog.length;
-    const chordDegree = ((prog[chordIndex] | 0) % 7 + 7) % 7;
+      // Columns density -> rhythm
+      if (isSwiss && st.varColsOn) {
+        const CE = colEdgesRef.current;
+        if (CE && CE.length === cols + 1) {
+          const col = AR.step % cols;
+          const w = CE[col + 1] - CE[col];
+          const avg = 1 / cols;
+          const ratio = clamp(w / avg, 0.25, 3.0);
+          stepSec = baseStepSec * ratio;
+        }
+      }
 
-    const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
+      const col = AR.step % cols;
 
-    const scaleMidi = buildScaleMidi({
-      rootPc: clamp(st.keyRoot ?? 0, 0, 11),
-      scaleName: st.scaleName,
-      baseMidi: clamp(st.baseMidi ?? 36, 12, 60),
-      degreesCount,
-    });
+      // chord progression
+      const prog = Array.isArray(st.prog) && st.prog.length ? st.prog : [0, 5, 3, 6];
+      const progRate = Math.max(1, st.progRate | 0);
+      const chordIndex = Math.floor(col / progRate) % prog.length;
+      const chordDegree = ((prog[chordIndex] | 0) % 7 + 7) % 7;
 
-    const chordTones = degreeToChordTones(
-      scaleMidi,
-      chordDegree,
-      st.chordType === "triad" ? "triad" : "7"
-    );
-
-    const hits = [];
-
-    for (let r = 0; r < rows; r++) {
-      const idx = r * cols + col;
-      const cell = map.get(idx);
-      if (!cell?.paint?.color) continue;
-
-      const rgb = hexToRgb(cell.paint.color);
-      if (!rgb) continue;
-
-      const lum = luminance01(rgb);
-      const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
-
-      // pitch mapping (always in scale)
-      const degIdx = Math.round(rowNorm * (degreesCount - 1));
-      const rowMidi = scaleMidi[degIdx];
-
-      let target = chordTones[col % chordTones.length];
-      while (target < rowMidi - 6) target += 12;
-      while (target > rowMidi + 6) target -= 12;
-
-      const freq = midiToFreq(target);
-
-      // COLUMN accent (velocity boost per column)
-      const colAccent = 0.7 + 0.3 * (col / cols);
-
-      const vel = clamp(0.1 + lum * 0.9 * colAccent, 0.05, 1);
-
-      // ROW envelope shaping
-      const attack = 0.005 + (1 - rowNorm) * 0.12;
-      const decay = 0.08 + rowNorm * 0.8;
-      const release = 0.05 + rowNorm * 0.6;
-
-      const cutoff =
-        (st.cutoffBase ?? 400) +
-        (st.cutoffSpan ?? 7000) * (0.3 + rowNorm * 0.7);
-
-      hits.push({
-        freq,
-        vel,
-        attack,
-        decay,
-        release,
-        cutoff,
+      // scale across octaves
+      const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
+      const scaleMidi = buildScaleMidi({
+        rootPc: clamp(st.keyRoot ?? 0, 0, 11),
+        scaleName: st.scaleName,
+        baseMidi: clamp(st.baseMidi ?? 36, 12, 72),
+        degreesCount,
       });
-    }
 
-    const maxNotes = clamp(st.maxNotesPerStep ?? 8, 1, 32);
-    hits.sort((a, b) => b.vel - a.vel);
-    const chosen = hits.slice(0, maxNotes);
+      const chordTones = degreeToChordTones(scaleMidi, chordDegree, st.chordType === "triad" ? "triad" : "7");
+      const maxNotes = clamp(st.maxNotesPerStep ?? 8, 1, 64);
 
-    const pool = audioRef.current.voices;
+      const RE = rowEdgesRef.current;
 
-    for (const h of chosen) {
-      const v = pool[audioRef.current.voicePtr % pool.length];
-      audioRef.current.voicePtr++;
+      const hits = [];
 
-      triggerVoice(ac, v, {
-        freq: h.freq,
-        vel: h.vel,
-        cutoffHz: h.cutoff,
-        attack: h.attack,
-        decaySec: h.decay,
-        release: h.release,
-      });
-    }
+      for (let r = 0; r < rows; r++) {
+        const idx = r * cols + col;
+        const cell = map.get(idx);
+        const paintObj = cell?.paint;
+        if (!paintObj?.color) continue;
 
-    audioRef.current.step++;
-    audioRef.current.timer = setTimeout(
-      tick,
-      Math.max(10, stepSec * 1000)
-    );
-  };
+        const rgb = hexToRgb(paintObj.color);
+        if (!rgb) continue;
 
-  if (A.timer) clearTimeout(A.timer);
-  A.timer = setTimeout(tick, 0);
-}
-  // keep scheduler running; never restart on paint changes
+        const lum = luminance01(rgb);
+        const hue = hue01(rgb);
+
+        // lane selection
+        let lane = 0;
+        if (st.laneMode === "hue") {
+          lane = clamp(Math.floor(hue * chordTones.length), 0, chordTones.length - 1);
+        } else {
+          lane = col % chordTones.length;
+        }
+
+        // row position: 0 top -> 1 bottom
+        const rowPos = rows <= 1 ? 0.5 : r / (rows - 1);
+
+        // row -> scale degree
+        const rowNormForPitch = 1 - rowPos; // top higher, bottom lower
+        const degFloat = rowNormForPitch * (degreesCount - 1);
+        const degIdx = clamp(Math.round(degFloat), 0, degreesCount - 1);
+
+        const rowMidi = scaleMidi[degIdx];
+
+        // chord tone pulled toward rowMidi
+        let target = chordTones[lane];
+        while (target < rowMidi - 6) target += 12;
+        while (target > rowMidi + 6) target -= 12;
+
+        const freq = midiToFreq(target);
+
+        // velocity from luminance
+        const vel = st.velFrom === "fixed" ? 0.55 : clamp(0.08 + 0.92 * lum, 0.05, 1);
+
+        // Row height ratio (tails) — THIS is what your “Rows (tails)” controls
+        let rowHeightRatio = 1.0;
+        if (isSwiss && st.varRowsOn && RE && RE.length === rows + 1) {
+          const rh = RE[r + 1] - RE[r];
+          const avg = 1 / rows;
+          rowHeightRatio = clamp(rh / avg, 0.15, 5.0);
+        }
+
+        // Envelope mapping:
+        // - Taller rows => longer decay/release (tails)
+        // - Denser (short) rows => snappier
+        const attack =
+          clamp(
+            (st.attackBase ?? 0.01) +
+              (st.attackSpan ?? 0.1) * (1 - rowHeightRatio) * 0.35 +
+              (st.attackSpan ?? 0.1) * (1 - lum) * 0.15,
+            0.002,
+            0.25
+          );
+
+        const decay =
+          clamp(
+            (st.decayBase ?? 0.08) +
+              (st.decaySpan ?? 0.9) * (0.25 + 0.75 * lum) * Math.pow(rowHeightRatio, 1.1),
+            0.03,
+            3.0
+          );
+
+        const release =
+          clamp(
+            (st.releaseBase ?? 0.08) +
+              (st.releaseSpan ?? 1.4) * (0.25 + 0.75 * rowPos) * Math.pow(rowHeightRatio, 1.15),
+            0.03,
+            4.0
+          );
+
+        // filter brightness
+        const cutoff =
+          (st.cutoffBase ?? 500) +
+          (st.cutoffSpan ?? 8000) * clamp(0.15 + 0.85 * lum, 0, 1);
+
+        // NOTE SELECTION (dense grids):
+        // Default: choose strongest/brightest notes.
+        // Optionally bias toward bottom or top if you want “audition” behavior.
+        let bias = 0;
+        if (st.priorityBias === "high") bias = (1 - rowPos) * 0.08; // top gets bonus
+        else if (st.priorityBias === "low") bias = rowPos * 0.08; // bottom gets bonus
+
+        const score = vel + bias; // no forced top bias anymore
+
+        hits.push({ freq, vel, cutoff, attack, decay, release, score });
+      }
+
+      hits.sort((a, b) => b.score - a.score);
+      const chosen = hits.slice(0, maxNotes);
+
+      const pool = AR.voices;
+      for (const h of chosen) {
+        const v = pool[AR.voicePtr % pool.length];
+        AR.voicePtr++;
+        triggerVoice(ac, v, {
+          freq: h.freq,
+          vel: h.vel,
+          cutoffHz: h.cutoff,
+          attack: h.attack,
+          decaySec: h.decay,
+          release: h.release,
+        });
+      }
+
+      AR.step++;
+      AR.timer = setTimeout(tick, Math.max(8, stepSec * 1000));
+    };
+
+    if (A.timer) clearTimeout(A.timer);
+    A.timer = setTimeout(tick, 0);
+  }
+
+  function stopScheduler() {
+    const A = audioRef.current;
+    A.running = false;
+    if (A.timer) clearTimeout(A.timer);
+    A.timer = null;
+  }
+
   React.useEffect(() => {
     startScheduler();
     return () => stopScheduler();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* =======================
+     Input handlers
+======================= */
+  const onPointerDown = async (e) => {
+    await unlockAudio();
+
+    e.preventDefault?.();
+    try {
+      e.currentTarget?.setPointerCapture?.(e.pointerId);
+    } catch {}
+    setDrawing(true);
+
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const { x, y } = pointerToCanvas(e);
+    const idx = getIdx(x, y);
+    if (idx == null) return;
+
+    const t = performance.now() * 0.001;
+
+    if (s.pat === "swiss-grid") {
+      const col = idx % s.cols;
+      const row = Math.floor(idx / s.cols);
+      applyPaintToIdx(idx, row, col, t);
+    } else {
+      const col = Math.floor(x / s.space);
+      const row = Math.floor(y / s.space);
+      applyPaintToIdx(idx, row, col, t);
+    }
+  };
+
+  const onPointerMove = (e) => {
+    if (!drawing) return;
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const { x, y } = pointerToCanvas(e);
+    const idx = getIdx(x, y);
+    if (idx == null) return;
+
+    const t = performance.now() * 0.001;
+
+    if (s.pat === "swiss-grid") {
+      const col = idx % s.cols;
+      const row = Math.floor(idx / s.cols);
+      applyPaintToIdx(idx, row, col, t);
+    } else {
+      const col = Math.floor(x / s.space);
+      const row = Math.floor(y / s.space);
+      applyPaintToIdx(idx, row, col, t);
+    }
+  };
+
+  const onPointerUp = () => setDrawing(false);
+
+  const gen = () => setCells((p) => [...p]);
+  const clearPaint = () => setCells([]);
 
   /* =======================
      Render loop
@@ -833,11 +882,9 @@ function startScheduler() {
 
     const t = tm * 0.001;
 
-    // paint lookup
     const map = new Map();
     for (const c of cells) map.set(c.idx, c);
 
-    ctx.fillStyle = "#111";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
@@ -877,7 +924,6 @@ function startScheduler() {
           const cx = x0 + s.space / 2;
           const cy = y0 + s.space / 2;
 
-          // background fill if painted
           const entry = map.get(idx);
           const col = entry?.paint?.color;
 
@@ -889,7 +935,6 @@ function startScheduler() {
             ctx.restore();
           }
 
-          // text
           const gi = chs.length ? (Math.floor((t * spd + r * 0.07 + c * 0.05) * 3) % chs.length) : 0;
           ctx.save();
           ctx.font = `${s.charSz}px ${getFontFamily()}`;
@@ -901,7 +946,6 @@ function startScheduler() {
       return;
     }
 
-    // swiss-grid
     if (s.pat === "swiss-grid") {
       const cols = Math.max(1, s.cols | 0);
       const rows = Math.max(1, s.rows | 0);
@@ -940,7 +984,6 @@ function startScheduler() {
           const entry = map.get(idx);
           const col = entry?.paint?.color;
 
-          // background paint
           if (col) {
             ctx.save();
             ctx.fillStyle = col;
@@ -949,7 +992,6 @@ function startScheduler() {
             ctx.restore();
           }
 
-          // character
           const gi = chs.length ? (Math.floor((t * spd + r * 0.09 + c * 0.05) * 3) % chs.length) : 0;
           const sz = Math.max(8, Math.min(g.w, g.h) * 0.55 * (s.swissCharScale ?? 1));
 
@@ -960,7 +1002,6 @@ function startScheduler() {
           ctx.restore();
         }
       }
-      return;
     }
   };
 
@@ -991,7 +1032,7 @@ function startScheduler() {
     };
   }, []);
 
-  // load Inter font (safe)
+  // load Inter
   React.useEffect(() => {
     const link = document.createElement("link");
     link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap";
@@ -999,8 +1040,6 @@ function startScheduler() {
     document.head.appendChild(link);
     return () => document.head.removeChild(link);
   }, []);
-
-  const clearPaint = () => setCells([]);
 
   /* =======================
      UI
@@ -1013,7 +1052,6 @@ function startScheduler() {
         <div className="fixed inset-0 bg-black/30 z-30 md:hidden" onClick={() => setPanelOpen(false)} />
       )}
 
-      {/* Controls */}
       <div
         className={
           "fixed md:static z-40 md:z-auto inset-y-0 left-0 w-80 max-w-[90vw] bg-neutral-50 border-r border-neutral-200 p-4 md:p-5 overflow-y-auto space-y-4 text-sm transform transition-transform duration-200 md:transform-none " +
@@ -1227,7 +1265,7 @@ function startScheduler() {
                     className="w-full"
                   />
                   <div className="text-[11px] text-neutral-600">
-                    Columns now affect <b>step speed</b> (narrow = faster, wide = slower).
+                    Columns affect <b>step speed</b> (narrow = faster, wide = slower).
                   </div>
                 </>
               )}
@@ -1282,7 +1320,7 @@ function startScheduler() {
                     className="w-full"
                   />
                   <div className="text-[11px] text-neutral-600">
-                    Rows now affect <b>decay</b> (taller = longer, denser = shorter).
+                    Rows affect <b>attack/decay/release</b> using row height (taller = longer tails).
                   </div>
                 </>
               )}
@@ -1292,9 +1330,7 @@ function startScheduler() {
 
         {s.pat === "char-grid" && (
           <div className="space-y-2">
-            <label className="block text-xs font-semibold uppercase tracking-wider">
-              Spacing: {s.space}px
-            </label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
             <input
               type="range"
               min="12"
@@ -1303,9 +1339,7 @@ function startScheduler() {
               onChange={(e) => setS((p) => ({ ...p, space: parseInt(e.target.value, 10) }))}
               className="w-full"
             />
-            <label className="block text-xs font-semibold uppercase tracking-wider">
-              Char Size: {s.charSz}px
-            </label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Char Size: {s.charSz}px</label>
             <input
               type="range"
               min="8"
@@ -1374,7 +1408,7 @@ function startScheduler() {
           <input
             type="range"
             min="1"
-            max="16"
+            max="32"
             value={s.maxNotesPerStep}
             onChange={(e) => setS((p) => ({ ...p, maxNotesPerStep: parseInt(e.target.value, 10) }))}
             className="w-full"
@@ -1436,15 +1470,26 @@ function startScheduler() {
             </div>
           </div>
 
-          <div className="text-[11px] text-neutral-600">
-            <b>Always in tune:</b> pitches are quantized to {keyName} {s.scaleName}.
-            <br />
-            <b>Paint meaning:</b> color → velocity + brightness; hue → chord lane (if enabled).
+          <div className="space-y-1">
+            <div className="text-xs text-neutral-600">Dense-grid note pick</div>
+            <select
+              value={s.priorityBias}
+              onChange={(e) => setS((p) => ({ ...p, priorityBias: e.target.value }))}
+              className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+            >
+              <option value="none">No bias</option>
+              <option value="high">Prefer top rows</option>
+              <option value="low">Prefer bottom rows</option>
+            </select>
           </div>
 
-          <label className="block text-xs font-semibold uppercase tracking-wider">
-            Voices: {s.voices}
-          </label>
+          <div className="text-[11px] text-neutral-600">
+            <b>Always in tune:</b> pitches quantized to {keyName} {s.scaleName}.
+            <br />
+            <b>Why bottom can seem silent:</b> one column plays at a time + max notes/step.
+          </div>
+
+          <label className="block text-xs font-semibold uppercase tracking-wider">Voices: {s.voices}</label>
           <input
             type="range"
             min="1"
@@ -1584,9 +1629,7 @@ function startScheduler() {
           </div>
         </div>
 
-        <div className="text-[11px] text-neutral-500">
-          Tip: browser may require a click before audio starts.
-        </div>
+        <div className="text-[11px] text-neutral-500">Tip: click/touch canvas once to unlock audio.</div>
       </div>
 
       {/* Canvas */}
