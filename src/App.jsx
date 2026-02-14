@@ -669,214 +669,145 @@ export default function App() {
 }, [s]);
 
   /* =======================
-     Scheduler (stable)
-     - reads cellsRef + sRef
-     - variable density affects step duration + decay
+ /* =======================
+   Scheduler (FULL FIXED)
 ======================= */
-  function startScheduler() {
-    const A = ensureAudio();
-    const ac = A.ac;
-    if (ac.state === "suspended") ac.resume?.();
+function startScheduler() {
+  const A = ensureAudio();
+  const ac = A.ac;
+  if (ac.state === "suspended") ac.resume?.();
 
-    A.running = true;
+  A.running = true;
 
-    const tick = () => {
-      if (!audioRef.current.running) return;
+  const tick = () => {
+    if (!audioRef.current.running) return;
 
-      const st = sRef.current;
-      if (!st.soundOn) {
-        audioRef.current.timer = setTimeout(tick, 50);
-        return;
-      }
+    const st = sRef.current;
+    if (!st.soundOn) {
+      audioRef.current.timer = setTimeout(tick, 40);
+      return;
+    }
 
-      ensureVoices();
-      updateAudioParamsRealtime();
+    ensureVoices();
+    updateAudioParamsRealtime();
 
-      const cellsNow = cellsRef.current;
+    const cellsNow = cellsRef.current;
+    const map = new Map();
+    for (const c of cellsNow) map.set(c.idx, c);
 
-      // build lookup for quick access
-      const map = new Map();
-      for (const c of cellsNow) map.set(c.idx, c);
+    let cols = Math.max(1, st.cols | 0);
+    let rows = Math.max(1, st.rows | 0);
 
-      // Determine grid dimensions
-      let cols = 1,
-        rows = 1;
-      let isSwiss = st.pat === "swiss-grid";
+    const bpm = clamp(st.bpm ?? 120, 30, 260);
+    const baseStep = 60 / bpm / 2;
 
-      if (isSwiss) {
-        cols = Math.max(1, st.cols | 0);
-        rows = Math.max(1, st.rows | 0);
-      } else {
-        // char-grid dims depend on canvas
-        const cv = canvasRef.current;
-        if (cv) {
-          cols = Math.max(1, Math.floor(cv.width / st.space));
-          rows = Math.max(1, Math.floor(cv.height / st.space));
-        } else {
-          cols = 16;
-          rows = 12;
-        }
-      }
+    const col = audioRef.current.step % cols;
 
-      // base step duration from BPM (16th-note feel)
-      const bpm = clamp(st.bpm ?? 120, 30, 260);
-      const baseStepSec = 60 / bpm / 2; // 8th-note grid (feels musical)
-      let stepSec = baseStepSec;
+    // COLUMN → rhythm speed scaling
+    let stepSec = baseStep;
+    if (st.varColsOn && colEdges) {
+      const w = colEdges[col + 1] - colEdges[col];
+      const avg = 1 / cols;
+      const ratio = clamp(w / avg, 0.5, 2);
+      stepSec = baseStep * ratio;
+    }
 
-      // Variable-density rhythm: column width affects time
-      if (isSwiss && st.varColsOn) {
-        const ce =
-          colEdges ||
-          (st.cols
-            ? Array.from({ length: st.cols + 1 }, (_, i) => i / st.cols)
-            : Array.from({ length: cols + 1 }, (_, i) => i / cols));
-        const col = audioRef.current.step % cols;
-        const w = ce[col + 1] - ce[col];
-        const avg = 1 / cols;
-        // narrower column => faster (shorter step), wider => slower
-        const ratio = clamp(w / avg, 0.4, 2.2);
-        stepSec = baseStepSec * ratio;
-      }
+    const prog = st.prog?.length ? st.prog : [0, 5, 3, 6];
+    const chordIndex = Math.floor(col / Math.max(1, st.progRate)) % prog.length;
+    const chordDegree = ((prog[chordIndex] | 0) % 7 + 7) % 7;
 
-      // pick current column
-      const col = audioRef.current.step % cols;
+    const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
 
-      // chord progression step
-      const prog = Array.isArray(st.prog) && st.prog.length ? st.prog : [0, 5, 3, 6];
-      const progRate = Math.max(1, st.progRate | 0);
-      const chordIndex = Math.floor(col / progRate) % prog.length;
-      const chordDegree = ((prog[chordIndex] | 0) % 7 + 7) % 7;
+    const scaleMidi = buildScaleMidi({
+      rootPc: clamp(st.keyRoot ?? 0, 0, 11),
+      scaleName: st.scaleName,
+      baseMidi: clamp(st.baseMidi ?? 36, 12, 60),
+      degreesCount,
+    });
 
-      // scale midi across multiple octaves (for rows)
-      const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
-      const scaleMidi = buildScaleMidi({
-        rootPc: clamp(st.keyRoot ?? 0, 0, 11),
-        scaleName: st.scaleName,
-        baseMidi: clamp(st.baseMidi ?? 36, 12, 60),
-        degreesCount,
+    const chordTones = degreeToChordTones(
+      scaleMidi,
+      chordDegree,
+      st.chordType === "triad" ? "triad" : "7"
+    );
+
+    const hits = [];
+
+    for (let r = 0; r < rows; r++) {
+      const idx = r * cols + col;
+      const cell = map.get(idx);
+      if (!cell?.paint?.color) continue;
+
+      const rgb = hexToRgb(cell.paint.color);
+      if (!rgb) continue;
+
+      const lum = luminance01(rgb);
+      const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
+
+      // pitch mapping (always in scale)
+      const degIdx = Math.round(rowNorm * (degreesCount - 1));
+      const rowMidi = scaleMidi[degIdx];
+
+      let target = chordTones[col % chordTones.length];
+      while (target < rowMidi - 6) target += 12;
+      while (target > rowMidi + 6) target -= 12;
+
+      const freq = midiToFreq(target);
+
+      // COLUMN accent (velocity boost per column)
+      const colAccent = 0.7 + 0.3 * (col / cols);
+
+      const vel = clamp(0.1 + lum * 0.9 * colAccent, 0.05, 1);
+
+      // ROW envelope shaping
+      const attack = 0.005 + (1 - rowNorm) * 0.12;
+      const decay = 0.08 + rowNorm * 0.8;
+      const release = 0.05 + rowNorm * 0.6;
+
+      const cutoff =
+        (st.cutoffBase ?? 400) +
+        (st.cutoffSpan ?? 7000) * (0.3 + rowNorm * 0.7);
+
+      hits.push({
+        freq,
+        vel,
+        attack,
+        decay,
+        release,
+        cutoff,
       });
+    }
 
-      // chord tones (diatonic stack)
-      const chordTones = degreeToChordTones(scaleMidi, chordDegree, st.chordType === "triad" ? "triad" : "7");
-      const maxNotes = clamp(st.maxNotesPerStep ?? 8, 1, 32);
+    const maxNotes = clamp(st.maxNotesPerStep ?? 8, 1, 32);
+    hits.sort((a, b) => b.vel - a.vel);
+    const chosen = hits.slice(0, maxNotes);
 
-      // collect hits from this column
-      const hits = [];
+    const pool = audioRef.current.voices;
 
-      for (let r = 0; r < rows; r++) {
-        const idx = r * cols + col;
-        const cell = map.get(idx);
-        const paintObj = cell?.paint;
-        if (!paintObj?.color) continue;
+    for (const h of chosen) {
+      const v = pool[audioRef.current.voicePtr % pool.length];
+      audioRef.current.voicePtr++;
 
-        const rgb = hexToRgb(paintObj.color);
-        if (!rgb) continue;
+      triggerVoice(ac, v, {
+        freq: h.freq,
+        vel: h.vel,
+        cutoffHz: h.cutoff,
+        attack: h.attack,
+        decaySec: h.decay,
+        release: h.release,
+      });
+    }
 
-        const lum = luminance01(rgb); // 0..1
-        const h = hue01(rgb); // 0..1
+    audioRef.current.step++;
+    audioRef.current.timer = setTimeout(
+      tick,
+      Math.max(10, stepSec * 1000)
+    );
+  };
 
-        // lane selection:
-        // - "column": chord lane comes from row/col structure
-        // - "hue": hue decides chord tone lane (sounds more controllable with color)
-        let lane = 0;
-        if (st.laneMode === "hue") {
-          const lanes = chordTones.length;
-          lane = clamp(Math.floor(h * lanes), 0, lanes - 1);
-        } else {
-          lane = col % chordTones.length;
-        }
-
-        // row -> scale degree index (across octaves)
-        const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
-        const degFloat = rowNorm * (degreesCount - 1);
-        const degIdx = clamp(Math.round(degFloat), 0, degreesCount - 1);
-
-        // combine: pick a chord tone, then “pull” it toward row degree by octave alignment
-        // keep everything IN SCALE:
-        // - start from row degree
-        // - snap to nearest chord tone (within +-12) to keep chord coherence
-        const rowMidi = scaleMidi[degIdx];
-        let target = chordTones[lane];
-
-        // move chord tone into closest octave to rowMidi
-        while (target < rowMidi - 6) target += 12;
-        while (target > rowMidi + 6) target -= 12;
-
-        const freq = midiToFreq(target);
-
-        // velocity: luminance (always musical)
-        const vel = st.velFrom === "fixed" ? 0.55 : clamp(0.08 + 0.92 * lum, 0.05, 1);
-
-        // filter: luminance + slight row brightness
-        const cutoff = (st.cutoffBase ?? 400) + (st.cutoffSpan ?? 7200) * clamp(0.2 + 0.8 * lum, 0, 1);
-
-       
-        // =============================
-         // ROW → Envelope / Tail control
-         // =============================
-         const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
-         
-         // Decay scales by row height
-         let decay = (st.decayBase ?? 0.1) +
-            (st.decaySpan ?? 0.55) *
-            clamp(lum * (0.5 + rowNorm * 0.5), 0, 1);
-         
-         // Attack: higher rows = sharper attack
-         const attack = 0.005 + 0.08 * (1 - rowNorm);  
-         // Release: lower rows = longer release
-         const release = 0.05 + 0.5 * rowNorm;
-         // Filter brightness by row
-         const cutoff =
-            (st.cutoffBase ?? 400) +
-            (st.cutoffSpan ?? 7200) *
-            clamp(0.3 + rowNorm * 0.7, 0, 1);
-
-         decay = clamp(decay, 0.03, 1.5);
-
-        // priority: stronger notes win; also add tiny bonus for higher rows
-        const score = vel + rowNorm * 0.08;
-        hits.push({ freq, vel, cutoff, decay, score });
-      }
-
-      // If many painted cells exist, we DO NOT stop.
-      // We choose the best notes and keep clock running.
-      hits.sort((a, b) => b.score - a.score);
-      const chosen = hits.slice(0, maxNotes);
-
-      // trigger
-      const pool = audioRef.current.voices;
-      for (const h of chosen) {
-        const v = pool[audioRef.current.voicePtr % pool.length];
-        audioRef.current.voicePtr++;
-       triggerVoice(ac, v, {
-          freq: h.freq,
-          vel: h.vel,
-          cutoffHz: h.cutoff,
-          attack: attack,
-          decaySec: decay,
-          release: release
-});
-
-      }
-
-      audioRef.current.step++;
-
-      // schedule next tick (variable rhythm)
-      audioRef.current.timer = setTimeout(tick, Math.max(10, stepSec * 1000));
-    };
-
-    // immediate tick
-    if (A.timer) clearTimeout(A.timer);
-    A.timer = setTimeout(tick, 0);
-  }
-
-  function stopScheduler() {
-    const A = audioRef.current;
-    A.running = false;
-    if (A.timer) clearTimeout(A.timer);
-    A.timer = null;
-  }
-
+  if (A.timer) clearTimeout(A.timer);
+  A.timer = setTimeout(tick, 0);
+}
   // keep scheduler running; never restart on paint changes
   React.useEffect(() => {
     startScheduler();
