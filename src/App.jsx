@@ -40,31 +40,6 @@ function hue01({ r, g, b }) {
 function midiToFreq(m) {
   return 440 * Math.pow(2, (m - 69) / 12);
 }
-function hslToRgb(h, s, l) {
-  // h:0..1 s:0..1 l:0..1
-  const hue2rgb = (p, q, t) => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  let r, g, b;
-  if (s === 0) r = g = b = l;
-  else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    r = hue2rgb(p, q, h + 1 / 3);
-    g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1 / 3);
-  }
-  return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
-}
-function rgbToHex({ r, g, b }) {
-  const to2 = (n) => n.toString(16).padStart(2, "0");
-  return `#${to2(r)}${to2(g)}${to2(b)}`;
-}
 
 /* =======================
    Variable grid density
@@ -117,6 +92,7 @@ function findIndexFromEdges(edges, v01) {
    Music: always in key
 ======================= */
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
 const SCALES = {
   major: [0, 2, 4, 5, 7, 9, 11],
   naturalMinor: [0, 2, 3, 5, 7, 8, 10],
@@ -127,6 +103,7 @@ const SCALES = {
   mixolydian: [0, 2, 4, 5, 7, 9, 10],
   locrian: [0, 1, 3, 5, 6, 8, 10],
 };
+
 function buildScaleMidi({ rootPc, scaleName, baseMidi, degreesCount }) {
   const ints = SCALES[scaleName] ?? SCALES.major;
   const out = [];
@@ -137,6 +114,7 @@ function buildScaleMidi({ rootPc, scaleName, baseMidi, degreesCount }) {
   }
   return out;
 }
+
 function degreeToChordTones(scaleMidi, degreeIndex, chordType = "7") {
   const steps = chordType === "triad" ? [0, 2, 4] : [0, 2, 4, 6];
   const tones = [];
@@ -154,6 +132,7 @@ function createReverbImpulse(ac, seconds = 2.2, decay = 2.0) {
   const rate = ac.sampleRate;
   const len = Math.max(1, Math.floor(seconds * rate));
   const impulse = ac.createBuffer(2, len, rate);
+
   for (let ch = 0; ch < 2; ch++) {
     const data = impulse.getChannelData(ch);
     for (let i = 0; i < len; i++) {
@@ -163,6 +142,7 @@ function createReverbImpulse(ac, seconds = 2.2, decay = 2.0) {
   }
   return impulse;
 }
+
 function makeVoice(ac) {
   const osc = ac.createOscillator();
   const filter = ac.createBiquadFilter();
@@ -170,16 +150,17 @@ function makeVoice(ac) {
 
   osc.type = "sawtooth";
   filter.type = "lowpass";
-  filter.Q.value = 0.65;
+  filter.Q.value = 0.7;
 
   gain.gain.value = 0.0001;
 
   osc.connect(filter);
   filter.connect(gain);
-
   osc.start();
+
   return { osc, filter, gain };
 }
+
 function triggerVoice(ac, voice, { freq, vel, cutoffHz, attack, decaySec, release }) {
   const now = ac.currentTime;
   const v = clamp(vel, 0.0001, 1);
@@ -187,16 +168,18 @@ function triggerVoice(ac, voice, { freq, vel, cutoffHz, attack, decaySec, releas
   voice.osc.frequency.setValueAtTime(freq, now);
 
   voice.filter.frequency.cancelScheduledValues(now);
-  voice.filter.frequency.setValueAtTime(clamp(cutoffHz, 80, 16000), now);
+  voice.filter.frequency.setValueAtTime(clamp(cutoffHz, 120, 18000), now);
 
   const g = voice.gain.gain;
   g.cancelScheduledValues(now);
   g.setValueAtTime(0.0001, now);
-  g.exponentialRampToValueAtTime(Math.max(0.00012, v), now + clamp(attack, 0.001, 0.2));
-  g.exponentialRampToValueAtTime(
-    0.0001,
-    now + clamp(attack, 0.001, 0.2) + clamp(decaySec, 0.02, 2.5) + clamp(release, 0.02, 2.5)
-  );
+
+  const a = clamp(attack ?? 0.01, 0.002, 0.25);
+  const d = clamp(decaySec ?? 0.2, 0.02, 4.0);
+  const r = clamp(release ?? 0.15, 0.02, 6.0);
+
+  g.exponentialRampToValueAtTime(v, now + a);
+  g.exponentialRampToValueAtTime(0.0001, now + a + d + r);
 }
 
 /* =======================
@@ -206,7 +189,6 @@ export default function App() {
   const canvasRef = React.useRef(null);
   const rafRef = React.useRef(null);
 
-  // cells in state + ref for scheduler
   const [cells, setCells] = React.useState([]);
   const cellsRef = React.useRef([]);
   React.useEffect(() => {
@@ -215,7 +197,6 @@ export default function App() {
 
   const [panelOpen, setPanelOpen] = React.useState(false);
 
-  // painting
   const [paint, setPaint] = React.useState({
     mode: "color",
     color: "#111111",
@@ -223,7 +204,6 @@ export default function App() {
   });
   const [drawing, setDrawing] = React.useState(false);
 
-  // settings (visual + sound + midi)
   const [s, setS] = React.useState({
     pat: "swiss-grid", // swiss-grid | char-grid
 
@@ -251,69 +231,66 @@ export default function App() {
     rowSigma: 0.18,
 
     // color string
-    colorSeqOn: true,
     colorSeq: ["#111111", "#ff0055", "#00c2ff", "#00ff88", "#ffe600"],
     colorSeqSpeed: 1.0,
     colorSeqBehave: "same", // same | cycle | wave | random
 
-    // ======= SOUND (always in key) =======
+    // ===== SOUND =====
     soundOn: true,
     bpm: 120,
-    maxNotesPerStep: 10,
+    maxNotesPerStep: 10, // bump default a bit for dense grids
 
-    keyRoot: 0, // 0=C
+    // harmony
+    keyRoot: 0,
     scaleName: "naturalMinor",
-    baseMidi: 36,
+    baseMidi: 42, // slightly higher so bottom rows are clearly audible
     octaveSpan: 4,
     chordType: "7",
     prog: [0, 5, 3, 6],
     progRate: 4,
 
-    laneMode: "hue", // column | hue
-    velFrom: "luma", // luma | fixed
-    cutoffBase: 400,
-    cutoffSpan: 7200,
+    // mapping
+    laneMode: "hue", // hue tends to sound more “paint-controlled”
+    velFrom: "luma",
 
-    // envelope bases
-    atkBase: 0.008,
-    atkSpan: 0.09,
-    decBase: 0.08,
-    decSpan: 0.65,
-    relBase: 0.06,
-    relSpan: 0.85,
+    cutoffBase: 500,
+    cutoffSpan: 8000,
+
+    // envelope base (rows will mod these)
+    attackBase: 0.01,
+    attackSpan: 0.10,
+    decayBase: 0.08,
+    decaySpan: 0.90,
+    releaseBase: 0.08,
+    releaseSpan: 1.40,
+
+    // dense-grid note selection: if you want bottom to win, set this to "low"
+    priorityBias: "none", // none | high | low
 
     voices: 14,
 
     // FX
     master: 0.85,
+
     reverbOn: true,
     reverbMix: 0.22,
     reverbTime: 2.2,
+
     delayOn: true,
     delayMix: 0.18,
     delayTime: 0.28,
     delayFeedback: 0.35,
+
     driveOn: true,
     drive: 0.6,
-
-    // ======= MIDI =======
-    midiOn: true,
-    midiDraw: true, // MIDI paints the grid
-    midiThru: true, // MIDI also plays the synth immediately
-    midiChannel: -1, // -1 = omni, else 0..15
-    midiLo: 36,
-    midiHi: 84,
-    midiFadeMin: 0.25, // seconds
-    midiFadeMax: 2.5, // seconds
   });
 
-  // settings ref for scheduler
   const sRef = React.useRef(s);
   React.useEffect(() => {
     sRef.current = s;
   }, [s]);
 
-  // palette (5)
+  // palette
   const palette = React.useMemo(() => {
     const arr = Array.isArray(s.colorSeq) ? s.colorSeq : [];
     const fixed = arr.map((x) => (isHexColor(x) ? x : "#111111"));
@@ -338,7 +315,7 @@ export default function App() {
     [s.colorSeqBehave, s.colorSeqSpeed]
   );
 
-  // variable edges
+  // variable edges (swiss-grid)
   const colEdges = React.useMemo(() => {
     if (s.pat !== "swiss-grid") return null;
     return s.varColsOn
@@ -353,13 +330,23 @@ export default function App() {
       : Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
   }, [s.pat, s.rows, s.varRowsOn, s.rowFocus, s.rowStrength, s.rowSigma]);
 
+  // IMPORTANT: scheduler must read *latest* edges
+  const colEdgesRef = React.useRef(null);
+  const rowEdgesRef = React.useRef(null);
+  React.useEffect(() => {
+    colEdgesRef.current = colEdges;
+    rowEdgesRef.current = rowEdges;
+  }, [colEdges, rowEdges]);
+
   function swissCellGeom(r, c, w, h) {
     const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
     const re = rowEdges || Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
+
     const x0 = ce[c] * w;
     const x1 = ce[c + 1] * w;
     const y0 = re[r] * h;
     const y1 = re[r + 1] * h;
+
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
   }
 
@@ -372,17 +359,19 @@ export default function App() {
     return { x, y };
   };
 
-  // index lookup
   const getSwissIdx = React.useCallback(
     (cx, cy) => {
       const cv = canvasRef.current;
       if (!cv) return null;
       const x01 = cx / cv.width;
       const y01 = cy / cv.height;
+
       const ce = colEdges || Array.from({ length: s.cols + 1 }, (_, i) => i / s.cols);
       const re = rowEdges || Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
+
       const col = findIndexFromEdges(ce, x01);
       const row = findIndexFromEdges(re, y01);
+
       if (col < 0 || row < 0 || col >= s.cols || row >= s.rows) return null;
       return row * s.cols + col;
     },
@@ -412,8 +401,7 @@ export default function App() {
     [s.pat, getSwissIdx, getCharGridIdx]
   );
 
-  // upsert / remove
-  const upsertCell = React.useCallback((idx, patch) => {
+  const upsertCell = (idx, patch) => {
     setCells((prev) => {
       const ex = prev.findIndex((c) => c.idx === idx);
       const next = [...prev];
@@ -421,15 +409,17 @@ export default function App() {
       else next.push({ idx, ...patch });
       return next;
     });
-  }, []);
-  const removeCell = React.useCallback((idx) => setCells((prev) => prev.filter((c) => c.idx !== idx)), []);
+  };
+  const removeCell = (idx) => setCells((prev) => prev.filter((c) => c.idx !== idx));
 
   const applyPaintToIdx = (idx, r, c, t) => {
     if (idx == null) return;
+
     if (paint.mode === "none") {
       removeCell(idx);
       return;
     }
+
     if (paint.useSeq) {
       const len = palette.length;
       const ci = colorSeqIndex(t, r, c, len);
@@ -457,25 +447,31 @@ export default function App() {
     running: false,
     step: 0,
     timer: null,
+    _revTime: null,
   });
 
   function ensureAudio() {
     const A = audioRef.current;
     if (!A.ac) {
       const ac = new (window.AudioContext || window.webkitAudioContext)();
+
       const master = ac.createGain();
       master.gain.value = 0.85;
 
       const drive = ac.createWaveShaper();
       drive.oversample = "2x";
-      const n = 2048;
-      const curve = new Float32Array(n);
-      const k = clamp(sRef.current.drive ?? 0.6, 0, 1) * 50;
-      for (let i = 0; i < n; i++) {
-        const x = (i * 2) / (n - 1) - 1;
-        curve[i] = Math.tanh(x * (1 + k));
-      }
-      drive.curve = curve;
+
+      const setDriveCurve = (amount) => {
+        const k = clamp(amount ?? 0.6, 0, 1) * 50;
+        const n = 2048;
+        const curve = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          const x = (i * 2) / (n - 1) - 1;
+          curve[i] = Math.tanh(x * (1 + k));
+        }
+        drive.curve = curve;
+      };
+      setDriveCurve(sRef.current.drive);
 
       const dry = ac.createGain();
       const wetRev = ac.createGain();
@@ -491,6 +487,8 @@ export default function App() {
       delay.connect(feedback);
       feedback.connect(delay);
 
+      // routing:
+      // voices -> drive -> [dry + fx] -> master -> destination
       drive.connect(dry);
       drive.connect(convolver);
       drive.connect(delay);
@@ -513,11 +511,7 @@ export default function App() {
       A.convolver = convolver;
       A.delay = delay;
       A.feedback = feedback;
-      A.voices = [];
-      A.voicePtr = 0;
-      A.running = false;
-      A.step = 0;
-      A.timer = null;
+      A._revTime = sRef.current.reverbTime;
     }
     return A;
   }
@@ -538,7 +532,7 @@ export default function App() {
 
     A.master.gain.setTargetAtTime(clamp(st.master, 0, 1.2), A.ac.currentTime, 0.02);
 
-    // drive
+    // drive curve / bypass
     if (st.driveOn) {
       const k = clamp(st.drive ?? 0.6, 0, 1) * 50;
       const n = 2048;
@@ -555,7 +549,6 @@ export default function App() {
       A.drive.curve = curve;
     }
 
-    // reverb
     A.wetRev.gain.setTargetAtTime(st.reverbOn ? clamp(st.reverbMix, 0, 1) : 0, A.ac.currentTime, 0.02);
     if (A._revTime == null) A._revTime = st.reverbTime;
     if (Math.abs(st.reverbTime - A._revTime) > 0.12) {
@@ -563,7 +556,6 @@ export default function App() {
       A.convolver.buffer = createReverbImpulse(A.ac, clamp(st.reverbTime, 0.3, 6), 2.0);
     }
 
-    // delay
     A.wetDel.gain.setTargetAtTime(st.delayOn ? clamp(st.delayMix, 0, 1) : 0, A.ac.currentTime, 0.02);
     A.delay.delayTime.setTargetAtTime(clamp(st.delayTime, 0.01, 1.5), A.ac.currentTime, 0.02);
     A.feedback.gain.setTargetAtTime(clamp(st.delayFeedback, 0, 0.95), A.ac.currentTime, 0.02);
@@ -571,19 +563,19 @@ export default function App() {
 
   function ensureVoices() {
     const A = ensureAudio();
-    const ac = A.ac;
     const want = clamp(sRef.current.voices ?? 12, 1, 32);
     if (A.voices.length !== want) {
-      const newPool = Array.from({ length: want }, () => {
-        const v = makeVoice(ac);
+      const pool = Array.from({ length: want }, () => {
+        const v = makeVoice(A.ac);
         v.gain.connect(A.drive);
         return v;
       });
-      A.voices = newPool;
+      A.voices = pool;
       A.voicePtr = 0;
     }
   }
 
+  // Keep params hot; don't create audio until user unlocks
   React.useEffect(() => {
     if (audioRef.current.ac) {
       ensureVoices();
@@ -593,22 +585,28 @@ export default function App() {
   }, [s]);
 
   /* =======================
-     Scheduler (stable)
-     - columns affect step speed (rhythm)
-     - rows affect envelope (tails)
+     Scheduler
 ======================= */
   function startScheduler() {
     const A = ensureAudio();
     const ac = A.ac;
-    if (ac.state === "suspended") ac.resume?.();
     A.running = true;
 
     const tick = () => {
-      if (!audioRef.current.running) return;
+      const AR = audioRef.current;
+      if (!AR.running) return;
 
       const st = sRef.current;
+
+      // If user turned sound off, keep clock alive but no triggers
       if (!st.soundOn) {
-        audioRef.current.timer = setTimeout(tick, 50);
+        AR.timer = setTimeout(tick, 50);
+        return;
+      }
+
+      // If audio is suspended, do not spam resume (browser blocks without gesture)
+      if (ac.state === "suspended") {
+        AR.timer = setTimeout(tick, 80);
         return;
       }
 
@@ -616,7 +614,6 @@ export default function App() {
       updateAudioParamsRealtime();
 
       const cellsNow = cellsRef.current;
-
       const map = new Map();
       for (const c of cellsNow) map.set(c.idx, c);
 
@@ -638,42 +635,44 @@ export default function App() {
         }
       }
 
-      // base step
+      // base step duration from BPM (8th-note feel)
       const bpm = clamp(st.bpm ?? 120, 30, 260);
-      const baseStepSec = 60 / bpm / 2; // 8th grid
+      const baseStepSec = 60 / bpm / 2;
       let stepSec = baseStepSec;
 
-      // COLUMNS => rhythm (variable step time)
+      // Columns density -> rhythm
       if (isSwiss && st.varColsOn) {
-        const ce = colEdges || Array.from({ length: cols + 1 }, (_, i) => i / cols);
-        const curCol = audioRef.current.step % cols;
-        const w = ce[curCol + 1] - ce[curCol];
-        const avg = 1 / cols;
-        const ratio = clamp(w / avg, 0.35, 2.4);
-        stepSec = baseStepSec * ratio;
+        const CE = colEdgesRef.current;
+        if (CE && CE.length === cols + 1) {
+          const col = AR.step % cols;
+          const w = CE[col + 1] - CE[col];
+          const avg = 1 / cols;
+          const ratio = clamp(w / avg, 0.25, 3.0);
+          stepSec = baseStepSec * ratio;
+        }
       }
 
-      const col = audioRef.current.step % cols;
+      const col = AR.step % cols;
 
-      // harmony
+      // chord progression
       const prog = Array.isArray(st.prog) && st.prog.length ? st.prog : [0, 5, 3, 6];
       const progRate = Math.max(1, st.progRate | 0);
       const chordIndex = Math.floor(col / progRate) % prog.length;
       const chordDegree = ((prog[chordIndex] | 0) % 7 + 7) % 7;
 
+      // scale across octaves
       const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
       const scaleMidi = buildScaleMidi({
         rootPc: clamp(st.keyRoot ?? 0, 0, 11),
         scaleName: st.scaleName,
-        baseMidi: clamp(st.baseMidi ?? 36, 12, 60),
+        baseMidi: clamp(st.baseMidi ?? 36, 12, 72),
         degreesCount,
       });
-      const chordTones = degreeToChordTones(scaleMidi, chordDegree, st.chordType === "triad" ? "triad" : "7");
-      const maxNotes = clamp(st.maxNotesPerStep ?? 10, 1, 32);
 
-      // ROWS => envelope + tails (and variable row height affects it more)
-      const re = isSwiss ? rowEdges || Array.from({ length: rows + 1 }, (_, i) => i / rows) : null;
-      const avgRowH = isSwiss ? 1 / rows : 1;
+      const chordTones = degreeToChordTones(scaleMidi, chordDegree, st.chordType === "triad" ? "triad" : "7");
+      const maxNotes = clamp(st.maxNotesPerStep ?? 8, 1, 64);
+
+      const RE = rowEdgesRef.current;
 
       const hits = [];
 
@@ -683,78 +682,100 @@ export default function App() {
         const paintObj = cell?.paint;
         if (!paintObj?.color) continue;
 
-        // if cell has an expiry and it's expired, skip (keeps grid clean under MIDI)
-        if (typeof cell.expiresAt === "number") {
-          const nowS = performance.now() * 0.001;
-          if (cell.expiresAt <= nowS) continue;
-        }
-
         const rgb = hexToRgb(paintObj.color);
         if (!rgb) continue;
 
         const lum = luminance01(rgb);
-        const h = hue01(rgb);
+        const hue = hue01(rgb);
 
+        // lane selection
         let lane = 0;
         if (st.laneMode === "hue") {
-          const lanes = chordTones.length;
-          lane = clamp(Math.floor(h * lanes), 0, lanes - 1);
+          lane = clamp(Math.floor(hue * chordTones.length), 0, chordTones.length - 1);
         } else {
           lane = col % chordTones.length;
         }
 
-        // row -> scale degree index
-        const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1); // top=1
-        const degFloat = rowNorm * (degreesCount - 1);
+        // row position: 0 top -> 1 bottom
+        const rowPos = rows <= 1 ? 0.5 : r / (rows - 1);
+
+        // row -> scale degree
+        const rowNormForPitch = 1 - rowPos; // top higher, bottom lower
+        const degFloat = rowNormForPitch * (degreesCount - 1);
         const degIdx = clamp(Math.round(degFloat), 0, degreesCount - 1);
 
         const rowMidi = scaleMidi[degIdx];
+
+        // chord tone pulled toward rowMidi
         let target = chordTones[lane];
         while (target < rowMidi - 6) target += 12;
         while (target > rowMidi + 6) target -= 12;
+
         const freq = midiToFreq(target);
 
+        // velocity from luminance
         const vel = st.velFrom === "fixed" ? 0.55 : clamp(0.08 + 0.92 * lum, 0.05, 1);
 
-        // brightness -> cutoff
-        const cutoff =
-          (st.cutoffBase ?? 400) + (st.cutoffSpan ?? 7200) * clamp(0.15 + 0.85 * lum, 0, 1);
-
-        // envelope controlled by row position
-        // top rows = shorter tails / snappier, bottom rows = longer tails
-        let attack = (st.atkBase ?? 0.008) + (st.atkSpan ?? 0.09) * clamp(1 - rowNorm, 0, 1);
-        let decay = (st.decBase ?? 0.08) + (st.decSpan ?? 0.65) * clamp(lum, 0, 1);
-        let release = (st.relBase ?? 0.06) + (st.relSpan ?? 0.85) * clamp(rowNorm, 0, 1);
-
-        // variable ROW density affects tails noticeably
-        if (isSwiss && st.varRowsOn && re) {
-          const rh = re[r + 1] - re[r];
-          const ratio = clamp(rh / avgRowH, 0.35, 2.4);
-          // taller row => longer decay+release; denser => shorter
-          const tailMul = clamp(ratio, 0.55, 1.9);
-          decay *= tailMul;
-          release *= tailMul;
-          // attack does the opposite slightly (denser feels snappier)
-          attack *= clamp(1.25 - (tailMul - 1) * 0.4, 0.5, 1.4);
+        // Row height ratio (tails) — THIS is what your “Rows (tails)” controls
+        let rowHeightRatio = 1.0;
+        if (isSwiss && st.varRowsOn && RE && RE.length === rows + 1) {
+          const rh = RE[r + 1] - RE[r];
+          const avg = 1 / rows;
+          rowHeightRatio = clamp(rh / avg, 0.15, 5.0);
         }
 
-        attack = clamp(attack, 0.002, 0.2);
-        decay = clamp(decay, 0.03, 2.0);
-        release = clamp(release, 0.03, 2.6);
+        // Envelope mapping:
+        // - Taller rows => longer decay/release (tails)
+        // - Denser (short) rows => snappier
+        const attack =
+          clamp(
+            (st.attackBase ?? 0.01) +
+              (st.attackSpan ?? 0.1) * (1 - rowHeightRatio) * 0.35 +
+              (st.attackSpan ?? 0.1) * (1 - lum) * 0.15,
+            0.002,
+            0.25
+          );
 
-        // IMPORTANT: no bias to top rows anymore (so dense grids trigger bottom too)
-        const score = vel;
+        const decay =
+          clamp(
+            (st.decayBase ?? 0.08) +
+              (st.decaySpan ?? 0.9) * (0.25 + 0.75 * lum) * Math.pow(rowHeightRatio, 1.1),
+            0.03,
+            3.0
+          );
+
+        const release =
+          clamp(
+            (st.releaseBase ?? 0.08) +
+              (st.releaseSpan ?? 1.4) * (0.25 + 0.75 * rowPos) * Math.pow(rowHeightRatio, 1.15),
+            0.03,
+            4.0
+          );
+
+        // filter brightness
+        const cutoff =
+          (st.cutoffBase ?? 500) +
+          (st.cutoffSpan ?? 8000) * clamp(0.15 + 0.85 * lum, 0, 1);
+
+        // NOTE SELECTION (dense grids):
+        // Default: choose strongest/brightest notes.
+        // Optionally bias toward bottom or top if you want “audition” behavior.
+        let bias = 0;
+        if (st.priorityBias === "high") bias = (1 - rowPos) * 0.08; // top gets bonus
+        else if (st.priorityBias === "low") bias = rowPos * 0.08; // bottom gets bonus
+
+        const score = vel + bias; // no forced top bias anymore
 
         hits.push({ freq, vel, cutoff, attack, decay, release, score });
       }
 
       hits.sort((a, b) => b.score - a.score);
-      const chosen = hits.slice(0, Math.min(maxNotes, hits.length));
+      const chosen = hits.slice(0, maxNotes);
 
-      const pool = audioRef.current.voices;
+      const pool = AR.voices;
       for (const h of chosen) {
-        const v = pool[audioRef.current.voicePtr % pool.length];
-        audioRef.current.voicePtr++;
+        const v = pool[AR.voicePtr % pool.length];
+        AR.voicePtr++;
         triggerVoice(ac, v, {
           freq: h.freq,
           vel: h.vel,
@@ -765,8 +786,8 @@ export default function App() {
         });
       }
 
-      audioRef.current.step++;
-      audioRef.current.timer = setTimeout(tick, Math.max(10, stepSec * 1000));
+      AR.step++;
+      AR.timer = setTimeout(tick, Math.max(8, stepSec * 1000));
     };
 
     if (A.timer) clearTimeout(A.timer);
@@ -787,236 +808,11 @@ export default function App() {
   }, []);
 
   /* =======================
-     MIDI (Web MIDI API)
-     - MIDI paints the grid (velocity, duration -> color + persistence)
-     - optional MIDI-thru (plays synth immediately)
-======================= */
-  const [midiSupported, setMidiSupported] = React.useState(false);
-  const [midiInputs, setMidiInputs] = React.useState([]);
-  const [midiInputId, setMidiInputId] = React.useState("");
-  const midiAccessRef = React.useRef(null);
-  const midiActiveRef = React.useRef(new Map()); // key: note+ch => { t0, vel, row, col, idx, note }
-
-  const midiToColor = React.useCallback((note, vel01, durSec) => {
-    // predictable but beautiful:
-    // - pitch -> hue
-    // - velocity -> saturation + lightness
-    // - duration -> slight lightness shift (longer = a bit brighter)
-    const h = clamp(note / 127, 0, 1);
-    const s = clamp(0.25 + vel01 * 0.7, 0, 1);
-    const l = clamp(0.18 + vel01 * 0.55 + clamp(durSec / 2.5, 0, 1) * 0.12, 0, 1);
-    return rgbToHex(hslToRgb(h, s, l));
-  }, []);
-
-  const getGridDims = React.useCallback(() => {
-    const st = sRef.current;
-    if (st.pat === "swiss-grid") {
-      return { cols: Math.max(1, st.cols | 0), rows: Math.max(1, st.rows | 0) };
-    }
-    const cv = canvasRef.current;
-    if (cv) {
-      return {
-        cols: Math.max(1, Math.floor(cv.width / st.space)),
-        rows: Math.max(1, Math.floor(cv.height / st.space)),
-      };
-    }
-    return { cols: 16, rows: 12 };
-  }, []);
-
-  const midiNoteToCell = React.useCallback((note) => {
-    const st = sRef.current;
-    const { cols, rows } = getGridDims();
-    const lo = clamp(st.midiLo ?? 36, 0, 127);
-    const hi = clamp(st.midiHi ?? 84, 0, 127);
-    const span = Math.max(1, hi - lo);
-
-    // higher pitch goes toward top
-    const t = clamp((note - lo) / span, 0, 1);
-    const row = clamp(Math.round((1 - t) * (rows - 1)), 0, rows - 1);
-
-    // column follows the running scheduler so MIDI "locks" to rhythm
-    const col = (audioRef.current.step || 0) % cols;
-    const idx = row * cols + col;
-
-    return { row, col, idx, cols, rows };
-  }, [getGridDims]);
-
-  const paintFromMidiOn = React.useCallback(
-    (note, vel, ch) => {
-      const st = sRef.current;
-      if (!st.midiOn || !st.midiDraw) return;
-
-      const nowS = performance.now() * 0.001;
-      const vel01 = clamp(vel / 127, 0, 1);
-
-      const { row, col, idx } = midiNoteToCell(note);
-
-      // immediate color on note-on
-      const color = midiToColor(note, vel01, 0);
-
-      // short initial presence; updated on note-off to reflect duration
-      const expiresAt = nowS + clamp(st.midiFadeMin ?? 0.25, 0.05, 6);
-
-      upsertCell(idx, {
-        paint: { mode: "color", color },
-        midi: { note, vel: vel01, ch, t0: nowS, dur: 0 },
-        expiresAt,
-      });
-
-      midiActiveRef.current.set(`${note}:${ch}`, { t0: nowS, vel01, note, ch, idx, row, col });
-    },
-    [midiNoteToCell, midiToColor, upsertCell]
-  );
-
-  const paintFromMidiOff = React.useCallback(
-    (note, ch) => {
-      const st = sRef.current;
-      if (!st.midiOn || !st.midiDraw) return;
-
-      const key = `${note}:${ch}`;
-      const entry = midiActiveRef.current.get(key);
-      if (!entry) return;
-
-      const nowS = performance.now() * 0.001;
-      const dur = clamp(nowS - entry.t0, 0, 10);
-
-      // update the same cell: duration changes how long it persists and slightly changes color
-      const color = midiToColor(note, entry.vel01, dur);
-      const fade = clamp(
-        (st.midiFadeMin ?? 0.25) + (st.midiFadeMax ?? 2.5 - (st.midiFadeMin ?? 0.25)) * clamp(dur / 2.0, 0, 1),
-        0.05,
-        8
-      );
-      const expiresAt = nowS + fade;
-
-      upsertCell(entry.idx, {
-        paint: { mode: "color", color },
-        midi: { note, vel: entry.vel01, ch, t0: entry.t0, dur },
-        expiresAt,
-      });
-
-      midiActiveRef.current.delete(key);
-    },
-    [midiToColor, upsertCell]
-  );
-
-  const midiThruPlay = React.useCallback((note, vel) => {
-    const st = sRef.current;
-    if (!st.midiOn || !st.midiThru) return;
-
-    const A = ensureAudio();
-    const ac = A.ac;
-    if (!A.ac) return;
-
-    // IMPORTANT: audio may still be suspended until user gesture
-    // (we also unlock on pointer down and you can press "Enable Audio" button)
-    if (ac.state === "suspended") return;
-
-    ensureVoices();
-    updateAudioParamsRealtime();
-
-    const vel01 = clamp(vel / 127, 0.05, 1);
-    const freq = midiToFreq(note);
-
-    // MIDI-thru envelope feels responsive
-    const attack = 0.004 + (1 - vel01) * 0.02;
-    const decay = 0.08 + vel01 * 0.35;
-    const release = 0.12 + (1 - vel01) * 0.35;
-    const cutoff = (st.cutoffBase ?? 400) + (st.cutoffSpan ?? 7200) * clamp(0.25 + vel01 * 0.75, 0, 1);
-
-    const v = A.voices[A.voicePtr % A.voices.length];
-    A.voicePtr++;
-    triggerVoice(ac, v, { freq, vel: vel01, cutoffHz: cutoff, attack, decaySec: decay, release });
-  }, []);
-
-  React.useEffect(() => {
-    const ok = typeof navigator !== "undefined" && !!navigator.requestMIDIAccess;
-    setMidiSupported(ok);
-    if (!ok) return;
-
-    let cancelled = false;
-
-    const refreshInputs = (access) => {
-      const inputs = Array.from(access.inputs.values()).map((i) => ({
-        id: i.id,
-        name: i.name || "MIDI Input",
-        manufacturer: i.manufacturer || "",
-      }));
-      setMidiInputs(inputs);
-      // auto-select first if none selected
-      setMidiInputId((cur) => (cur && inputs.some((x) => x.id === cur) ? cur : inputs[0]?.id || ""));
-    };
-
-    navigator
-      .requestMIDIAccess({ sysex: false })
-      .then((access) => {
-        if (cancelled) return;
-        midiAccessRef.current = access;
-        refreshInputs(access);
-        access.onstatechange = () => refreshInputs(access);
-      })
-      .catch(() => {
-        setMidiSupported(false);
-      });
-
-    return () => {
-      cancelled = true;
-      const access = midiAccessRef.current;
-      if (access) access.onstatechange = null;
-    };
-  }, []);
-
-  // attach listener to selected input
-  React.useEffect(() => {
-    const access = midiAccessRef.current;
-    if (!access) return;
-
-    // detach all first
-    for (const inp of access.inputs.values()) inp.onmidimessage = null;
-
-    const inp = Array.from(access.inputs.values()).find((i) => i.id === midiInputId);
-    if (!inp) return;
-
-    inp.onmidimessage = async (e) => {
-      const st = sRef.current;
-      if (!st.midiOn) return;
-
-      // audio can only start after a user gesture, so MIDI won't unlock it by itself
-      // but we *do* keep painting even if audio is suspended
-      const data = e.data;
-      if (!data || data.length < 2) return;
-
-      const status = data[0] & 0xf0;
-      const ch = data[0] & 0x0f;
-
-      if (st.midiChannel >= 0 && ch !== st.midiChannel) return;
-
-      const note = data[1] & 0x7f;
-      const vel = (data[2] ?? 0) & 0x7f;
-
-      // Note On
-      if (status === 0x90 && vel > 0) {
-        paintFromMidiOn(note, vel, ch);
-        midiThruPlay(note, vel);
-        return;
-      }
-
-      // Note Off (0x80) OR Note On vel=0
-      if (status === 0x80 || (status === 0x90 && vel === 0)) {
-        paintFromMidiOff(note, ch);
-      }
-    };
-
-    return () => {
-      if (inp) inp.onmidimessage = null;
-    };
-  }, [midiInputId, paintFromMidiOn, paintFromMidiOff, midiThruPlay]);
-
-  /* =======================
-     Pointer drawing
+     Input handlers
 ======================= */
   const onPointerDown = async (e) => {
     await unlockAudio();
+
     e.preventDefault?.();
     try {
       e.currentTarget?.setPointerCapture?.(e.pointerId);
@@ -1029,15 +825,15 @@ export default function App() {
     const idx = getIdx(x, y);
     if (idx == null) return;
 
+    const t = performance.now() * 0.001;
+
     if (s.pat === "swiss-grid") {
       const col = idx % s.cols;
       const row = Math.floor(idx / s.cols);
-      const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t);
     } else {
       const col = Math.floor(x / s.space);
       const row = Math.floor(y / s.space);
-      const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t);
     }
   };
@@ -1050,24 +846,22 @@ export default function App() {
     const idx = getIdx(x, y);
     if (idx == null) return;
 
+    const t = performance.now() * 0.001;
+
     if (s.pat === "swiss-grid") {
       const col = idx % s.cols;
       const row = Math.floor(idx / s.cols);
-      const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t);
     } else {
       const col = Math.floor(x / s.space);
       const row = Math.floor(y / s.space);
-      const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t);
     }
   };
 
   const onPointerUp = () => setDrawing(false);
 
-  // refresh button (no-op but keeps UI)
   const gen = () => setCells((p) => [...p]);
-
   const clearPaint = () => setCells([]);
 
   /* =======================
@@ -1087,9 +881,7 @@ export default function App() {
     ctx.fillRect(0, 0, w, h);
 
     const t = tm * 0.001;
-    const nowS = performance.now() * 0.001;
 
-    // lookup
     const map = new Map();
     for (const c of cells) map.set(c.idx, c);
 
@@ -1135,26 +927,18 @@ export default function App() {
           const entry = map.get(idx);
           const col = entry?.paint?.color;
 
-          let a = 1;
-          if (entry?.expiresAt != null) {
-            const rem = entry.expiresAt - nowS;
-            if (rem <= 0) continue;
-            a = clamp(rem / 0.35, 0, 1);
-          }
-
           if (col) {
             ctx.save();
             ctx.fillStyle = col;
-            ctx.globalAlpha = 0.92 * a;
+            ctx.globalAlpha = 0.9;
             ctx.fillRect(x0, y0, s.space, s.space);
             ctx.restore();
           }
 
-          const gi = chs.length ? Math.floor((t * spd + r * 0.07 + c * 0.05) * 3) % chs.length : 0;
+          const gi = chs.length ? (Math.floor((t * spd + r * 0.07 + c * 0.05) * 3) % chs.length) : 0;
           ctx.save();
           ctx.font = `${s.charSz}px ${getFontFamily()}`;
           ctx.fillStyle = col ? "#0A0A0A" : "#111111";
-          ctx.globalAlpha = col ? 1 : 0.95;
           ctx.fillText(chs[gi] ?? "0", cx, cy);
           ctx.restore();
         }
@@ -1197,37 +981,27 @@ export default function App() {
         for (let c = 0; c < cols; c++) {
           const idx = r * cols + c;
           const g = swissCellGeom(r, c, w, h);
-
           const entry = map.get(idx);
           const col = entry?.paint?.color;
-
-          let a = 1;
-          if (entry?.expiresAt != null) {
-            const rem = entry.expiresAt - nowS;
-            if (rem <= 0) continue;
-            a = clamp(rem / 0.35, 0, 1);
-          }
 
           if (col) {
             ctx.save();
             ctx.fillStyle = col;
-            ctx.globalAlpha = 0.92 * a;
+            ctx.globalAlpha = 0.92;
             ctx.fillRect(g.x, g.y, g.w, g.h);
             ctx.restore();
           }
 
-          const gi = chs.length ? Math.floor((t * spd + r * 0.09 + c * 0.05) * 3) % chs.length : 0;
+          const gi = chs.length ? (Math.floor((t * spd + r * 0.09 + c * 0.05) * 3) % chs.length) : 0;
           const sz = Math.max(8, Math.min(g.w, g.h) * 0.55 * (s.swissCharScale ?? 1));
 
           ctx.save();
           ctx.font = `${Math.floor(sz)}px ${getFontFamily()}`;
           ctx.fillStyle = col ? "#0A0A0A" : "#111111";
-          ctx.globalAlpha = col ? 1 : 0.95;
           ctx.fillText(chs[gi] ?? "0", g.cx, g.cy);
           ctx.restore();
         }
       }
-      return;
     }
   };
 
@@ -1258,7 +1032,7 @@ export default function App() {
     };
   }, []);
 
-  // load Inter font
+  // load Inter
   React.useEffect(() => {
     const link = document.createElement("link");
     link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap";
@@ -1278,7 +1052,6 @@ export default function App() {
         <div className="fixed inset-0 bg-black/30 z-30 md:hidden" onClick={() => setPanelOpen(false)} />
       )}
 
-      {/* Controls */}
       <div
         className={
           "fixed md:static z-40 md:z-auto inset-y-0 left-0 w-80 max-w-[90vw] bg-neutral-50 border-r border-neutral-200 p-4 md:p-5 overflow-y-auto space-y-4 text-sm transform transition-transform duration-200 md:transform-none " +
@@ -1306,13 +1079,6 @@ export default function App() {
             <Download size={16} />
           </button>
         </div>
-
-        <button
-          onClick={unlockAudio}
-          className="w-full px-4 py-2.5 bg-neutral-900 text-white rounded-lg font-medium hover:bg-black min-h-[44px]"
-        >
-          Enable Audio (click once)
-        </button>
 
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wider">Pattern</label>
@@ -1554,7 +1320,7 @@ export default function App() {
                     className="w-full"
                   />
                   <div className="text-[11px] text-neutral-600">
-                    Rows affect <b>envelope</b> and <b>tails</b> (and row-height changes it more).
+                    Rows affect <b>attack/decay/release</b> using row height (taller = longer tails).
                   </div>
                 </>
               )}
@@ -1642,7 +1408,7 @@ export default function App() {
           <input
             type="range"
             min="1"
-            max="24"
+            max="32"
             value={s.maxNotesPerStep}
             onChange={(e) => setS((p) => ({ ...p, maxNotesPerStep: parseInt(e.target.value, 10) }))}
             className="w-full"
@@ -1679,9 +1445,48 @@ export default function App() {
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <div className="text-xs text-neutral-600">Chord</div>
+              <select
+                value={s.chordType}
+                onChange={(e) => setS((p) => ({ ...p, chordType: e.target.value }))}
+                className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+              >
+                <option value="7">7th</option>
+                <option value="triad">Triad</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-neutral-600">Lane mapping</div>
+              <select
+                value={s.laneMode}
+                onChange={(e) => setS((p) => ({ ...p, laneMode: e.target.value }))}
+                className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+              >
+                <option value="column">By Column</option>
+                <option value="hue">By Hue (color)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-xs text-neutral-600">Dense-grid note pick</div>
+            <select
+              value={s.priorityBias}
+              onChange={(e) => setS((p) => ({ ...p, priorityBias: e.target.value }))}
+              className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
+            >
+              <option value="none">No bias</option>
+              <option value="high">Prefer top rows</option>
+              <option value="low">Prefer bottom rows</option>
+            </select>
+          </div>
+
           <div className="text-[11px] text-neutral-600">
-            <b>Always in tune:</b> pitches are quantized to {keyName} {s.scaleName}.<br />
-            <b>Dense grid fix:</b> bottom rows now trigger too (no “top bias”).
+            <b>Always in tune:</b> pitches quantized to {keyName} {s.scaleName}.
+            <br />
+            <b>Why bottom can seem silent:</b> one column plays at a time + max notes/step.
           </div>
 
           <label className="block text-xs font-semibold uppercase tracking-wider">Voices: {s.voices}</label>
@@ -1708,110 +1513,6 @@ export default function App() {
           />
         </div>
 
-        {/* MIDI */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold uppercase tracking-wider">MIDI</label>
-            <button
-              onClick={() => setS((p) => ({ ...p, midiOn: !p.midiOn }))}
-              className={`p-1.5 rounded ${s.midiOn ? "bg-black text-white" : "bg-neutral-200"}`}
-              title="MIDI on/off"
-              disabled={!midiSupported}
-            >
-              {s.midiOn ? <Play size={14} fill="white" /> : <Square size={14} />}
-            </button>
-          </div>
-
-          {!midiSupported ? (
-            <div className="text-[11px] text-neutral-600">
-              This browser/device doesn’t support Web MIDI.
-            </div>
-          ) : (
-            <>
-              <div className="space-y-1">
-                <div className="text-xs text-neutral-600">Input</div>
-                <select
-                  value={midiInputId}
-                  onChange={(e) => setMidiInputId(e.target.value)}
-                  className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                >
-                  {midiInputs.map((i) => (
-                    <option key={i.id} value={i.id}>
-                      {i.name}
-                      {i.manufacturer ? ` (${i.manufacturer})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => setS((p) => ({ ...p, midiDraw: !p.midiDraw }))}
-                  className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
-                    s.midiDraw ? "bg-black text-white border-black" : "bg-white border-neutral-300"
-                  }`}
-                >
-                  MIDI draws
-                </button>
-                <button
-                  onClick={() => setS((p) => ({ ...p, midiThru: !p.midiThru }))}
-                  className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
-                    s.midiThru ? "bg-black text-white border-black" : "bg-white border-neutral-300"
-                  }`}
-                >
-                  MIDI thru
-                </button>
-              </div>
-
-              <div className="space-y-1">
-                <div className="text-xs text-neutral-600">Channel</div>
-                <select
-                  value={s.midiChannel}
-                  onChange={(e) => setS((p) => ({ ...p, midiChannel: parseInt(e.target.value, 10) }))}
-                  className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                >
-                  <option value={-1}>Omni</option>
-                  {Array.from({ length: 16 }, (_, i) => (
-                    <option key={i} value={i}>
-                      {i + 1}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <div className="text-xs text-neutral-600">Note low</div>
-                  <input
-                    type="number"
-                    min="0"
-                    max="127"
-                    value={s.midiLo}
-                    onChange={(e) => setS((p) => ({ ...p, midiLo: parseInt(e.target.value || "0", 10) }))}
-                    className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-xs text-neutral-600">Note high</div>
-                  <input
-                    type="number"
-                    min="0"
-                    max="127"
-                    value={s.midiHi}
-                    onChange={(e) => setS((p) => ({ ...p, midiHi: parseInt(e.target.value || "127", 10) }))}
-                    className="w-full px-2 py-2 bg-white border border-neutral-300 rounded-lg text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="text-[11px] text-neutral-600">
-                MIDI paints cells: <b>velocity → color intensity</b>, <b>duration → how long it stays</b>.
-                (It also follows the current column, so it locks to the rhythm.)
-              </div>
-            </>
-          )}
-        </div>
-
         {/* FX */}
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wider">FX</label>
@@ -1826,7 +1527,9 @@ export default function App() {
                 {s.reverbOn ? <Play size={14} fill="white" /> : <Square size={14} />}
               </button>
             </div>
-            <label className="block text-xs font-semibold uppercase tracking-wider">Mix: {s.reverbMix.toFixed(2)}</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">
+              Mix: {s.reverbMix.toFixed(2)}
+            </label>
             <input
               type="range"
               min="0"
@@ -1836,7 +1539,9 @@ export default function App() {
               onChange={(e) => setS((p) => ({ ...p, reverbMix: parseFloat(e.target.value) }))}
               className="w-full"
             />
-            <label className="block text-xs font-semibold uppercase tracking-wider">Time: {s.reverbTime.toFixed(1)}s</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">
+              Time: {s.reverbTime.toFixed(1)}s
+            </label>
             <input
               type="range"
               min="0.5"
@@ -1859,7 +1564,9 @@ export default function App() {
               </button>
             </div>
 
-            <label className="block text-xs font-semibold uppercase tracking-wider">Mix: {s.delayMix.toFixed(2)}</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">
+              Mix: {s.delayMix.toFixed(2)}
+            </label>
             <input
               type="range"
               min="0"
@@ -1870,7 +1577,9 @@ export default function App() {
               className="w-full"
             />
 
-            <label className="block text-xs font-semibold uppercase tracking-wider">Time: {s.delayTime.toFixed(2)}s</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">
+              Time: {s.delayTime.toFixed(2)}s
+            </label>
             <input
               type="range"
               min="0.05"
@@ -1905,7 +1614,9 @@ export default function App() {
                 {s.driveOn ? <Play size={14} fill="white" /> : <Square size={14} />}
               </button>
             </div>
-            <label className="block text-xs font-semibold uppercase tracking-wider">Amount: {s.drive.toFixed(2)}</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">
+              Amount: {s.drive.toFixed(2)}
+            </label>
             <input
               type="range"
               min="0"
@@ -1918,9 +1629,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="text-[11px] text-neutral-500">
-          If MIDI is drawing but you hear nothing: press <b>Enable Audio</b> once (browser rule).
-        </div>
+        <div className="text-[11px] text-neutral-500">Tip: click/touch canvas once to unlock audio.</div>
       </div>
 
       {/* Canvas */}
