@@ -161,7 +161,7 @@ function quantizeToScale(midi, scaleSet) {
 }
 
 /* =======================
-   Melody synth (cleaner + selectable osc)
+   Melody synth
 ======================= */
 function createReverbImpulse(ac, seconds = 2.2, decay = 2.0) {
   const rate = ac.sampleRate;
@@ -182,13 +182,11 @@ function makeVoice(ac) {
   const filter = ac.createBiquadFilter();
   const gain = ac.createGain();
 
-  // default clean
   osc.type = "triangle";
   filter.type = "lowpass";
   filter.Q.value = 0.75;
 
-  // fully silent idle (prevents hum)
-  gain.gain.value = 0.0;
+  gain.gain.value = 0.0; // silent idle
 
   osc.connect(filter);
   filter.connect(gain);
@@ -211,7 +209,6 @@ function triggerVoice(ac, voice, { freq, vel, cutoffHz, attack, decaySec, releas
   const g = voice.gain.gain;
   g.cancelScheduledValues(now);
 
-  // hard reset to zero so nothing sticks
   g.setValueAtTime(0.0, now);
   g.linearRampToValueAtTime(v, now + clamp(attack, 0.001, 0.2));
   g.exponentialRampToValueAtTime(0.00001, now + clamp(attack, 0.001, 0.2) + clamp(decaySec, 0.02, 2.5));
@@ -222,10 +219,7 @@ function triggerVoice(ac, voice, { freq, vel, cutoffHz, attack, decaySec, releas
 }
 
 /* =======================
-   Percussion (more percussive)
-   - click transient + noise + pitched body w/ pitch drop
-   - no continuous sources
-   - pitched parts quantized to scale => always "in tune"
+   Percussion (kit)
 ======================= */
 function makeNoiseBuffer(ac, durSec) {
   const len = Math.max(1, Math.floor(ac.sampleRate * durSec));
@@ -237,11 +231,11 @@ function makeNoiseBuffer(ac, durSec) {
 
 function triggerPerc(ac, dest, opts) {
   const {
-    type = "kick", // kick | snare | hat | tom
+    type = "kick", // kick | snare | hat | tom | wood | shaker | rim
     freq = 110,
     vel = 0.7,
-    decay = 0.18, // seconds
-    tone = 0.55, // 0=noise, 1=body
+    decay = 0.18,
+    tone = 0.55,
     bright = 0.5,
     punch = 0.65,
     driveAmt = 0.0,
@@ -253,7 +247,6 @@ function triggerPerc(ac, dest, opts) {
   const out = ac.createGain();
   out.gain.setValueAtTime(1.0, now);
 
-  // shaper
   const shaper = ac.createWaveShaper();
   shaper.oversample = "2x";
   {
@@ -267,24 +260,27 @@ function triggerPerc(ac, dest, opts) {
     shaper.curve = curve;
   }
 
-  // transient click
+  // click
   const clickBuf = makeNoiseBuffer(ac, 0.01);
   const click = ac.createBufferSource();
   click.buffer = clickBuf;
 
   const clickHP = ac.createBiquadFilter();
   clickHP.type = "highpass";
-  clickHP.frequency.setValueAtTime(2000, now);
+  clickHP.frequency.setValueAtTime(type === "hat" || type === "shaker" ? 6000 : 2000, now);
 
   const clickGain = ac.createGain();
   clickGain.gain.setValueAtTime(0.0, now);
-  clickGain.gain.linearRampToValueAtTime(0.35 * v * (0.5 + punch), now + 0.001);
-  clickGain.gain.exponentialRampToValueAtTime(0.00001, now + 0.02);
+  clickGain.gain.linearRampToValueAtTime(
+    (type === "wood" || type === "rim" ? 0.55 : 0.35) * v * (0.5 + punch),
+    now + 0.001
+  );
+  clickGain.gain.exponentialRampToValueAtTime(0.00001, now + (type === "shaker" ? 0.035 : 0.02));
 
   click.connect(clickHP);
   clickHP.connect(clickGain);
 
-  // noise layer (snare/hat emphasis)
+  // noise
   const nDur = clamp(0.03 + decay * 0.9, 0.05, 1.6);
   const noiseBuf = makeNoiseBuffer(ac, nDur);
   const noise = ac.createBufferSource();
@@ -292,51 +288,90 @@ function triggerPerc(ac, dest, opts) {
 
   const noiseBP = ac.createBiquadFilter();
   noiseBP.type = "bandpass";
-  noiseBP.Q.value = clamp(4 + punch * 10, 4, 18);
+  noiseBP.Q.value = clamp(4 + punch * 10, 4, 22);
 
+  // kit-ish centers
   const noiseCenter =
-    type === "hat"
-      ? lerp(6000, 11000, bright)
+    type === "hat" || type === "shaker"
+      ? lerp(6500, 12000, bright)
       : type === "snare"
       ? lerp(1400, 4200, bright)
+      : type === "wood" || type === "rim"
+      ? lerp(900, 3200, bright)
       : lerp(300, 2000, bright);
+
   noiseBP.frequency.setValueAtTime(noiseCenter, now);
 
   const noiseHP = ac.createBiquadFilter();
   noiseHP.type = "highpass";
-  noiseHP.frequency.setValueAtTime(type === "kick" ? 60 : type === "tom" ? 120 : 600, now);
+  noiseHP.frequency.setValueAtTime(
+    type === "kick" ? 60 : type === "tom" ? 120 : type === "wood" || type === "rim" ? 250 : 900,
+    now
+  );
 
   const noiseGain = ac.createGain();
   const noiseAmt =
-    type === "kick" ? 0.15 : type === "tom" ? 0.22 : type === "snare" ? 0.75 : 0.95;
+    type === "kick"
+      ? 0.12
+      : type === "tom"
+      ? 0.18
+      : type === "snare"
+      ? 0.75
+      : type === "wood" || type === "rim"
+      ? 0.35
+      : 0.95;
+
   noiseGain.gain.setValueAtTime(0.0, now);
   noiseGain.gain.linearRampToValueAtTime(noiseAmt * v * (1 - tone), now + 0.002);
-  noiseGain.gain.exponentialRampToValueAtTime(0.00001, now + clamp(decay, 0.03, 1.8));
+  noiseGain.gain.exponentialRampToValueAtTime(0.00001, now + clamp(decay, 0.03, 1.8) * (type === "shaker" ? 1.2 : 1.0));
 
   noise.connect(noiseBP);
   noiseBP.connect(noiseHP);
   noiseHP.connect(noiseGain);
 
-  // pitched body (kick/tom emphasis)
+  // body
   const body = ac.createOscillator();
-  body.type = "sine";
+  body.type = type === "wood" || type === "rim" ? "triangle" : "sine";
 
-  // pitch drop feels “percussive”, but still centered on in-key freq
   const f0 = clamp(freq, 35, 6000);
   const drop =
-    type === "kick" ? lerp(1.8, 3.2, punch) : type === "tom" ? lerp(1.2, 2.0, punch) : 1.05;
+    type === "kick"
+      ? lerp(1.8, 3.2, punch)
+      : type === "tom"
+      ? lerp(1.2, 2.0, punch)
+      : type === "wood" || type === "rim"
+      ? lerp(1.05, 1.35, punch)
+      : 1.02;
 
   body.frequency.setValueAtTime(f0 * drop, now);
-  body.frequency.exponentialRampToValueAtTime(f0, now + (type === "kick" ? 0.04 : 0.03));
+  body.frequency.exponentialRampToValueAtTime(f0, now + (type === "kick" ? 0.04 : type === "wood" ? 0.015 : 0.03));
 
   const bodyGain = ac.createGain();
-  const bodyAmt = type === "kick" ? 1.0 : type === "tom" ? 0.85 : type === "snare" ? 0.25 : 0.12;
-  const a = 0.0015;
-  const d = clamp(decay, 0.03, 1.8);
+  const bodyAmt =
+    type === "kick"
+      ? 1.0
+      : type === "tom"
+      ? 0.85
+      : type === "snare"
+      ? 0.25
+      : type === "wood" || type === "rim"
+      ? 0.55
+      : type === "shaker"
+      ? 0.05
+      : 0.12;
+
+  const a = type === "wood" || type === "rim" ? 0.0009 : 0.0015;
+  const d = clamp(decay, 0.03, 1.8) * (type === "wood" || type === "rim" ? 0.55 : 1.0);
 
   bodyGain.gain.setValueAtTime(0.0, now);
   bodyGain.gain.linearRampToValueAtTime(bodyAmt * v * tone, now + a);
   bodyGain.gain.exponentialRampToValueAtTime(0.00001, now + d);
+
+  // “wood” extra resonator: bandpass on the sum for a woody knock
+  const woodRes = ac.createBiquadFilter();
+  woodRes.type = "bandpass";
+  woodRes.Q.value = type === "wood" || type === "rim" ? 18 : 1;
+  woodRes.frequency.setValueAtTime(type === "wood" || type === "rim" ? clamp(f0 * lerp(1.6, 2.8, bright), 350, 6500) : 1000, now);
 
   // sum
   clickGain.connect(out);
@@ -344,12 +379,17 @@ function triggerPerc(ac, dest, opts) {
   body.connect(bodyGain);
   bodyGain.connect(out);
 
-  out.connect(shaper);
+  if (type === "wood" || type === "rim") {
+    out.connect(woodRes);
+    woodRes.connect(shaper);
+  } else {
+    out.connect(shaper);
+  }
+
   shaper.connect(dest);
 
-  // start/stop
   click.start(now);
-  click.stop(now + 0.03);
+  click.stop(now + 0.04);
 
   noise.start(now);
   noise.stop(now + nDur + 0.05);
@@ -364,6 +404,9 @@ function triggerPerc(ac, dest, opts) {
 export default function App() {
   const canvasRef = React.useRef(null);
   const rafRef = React.useRef(null);
+
+  // track canvas px for char-grid “rows/cols” controls
+  const canvasPxRef = React.useRef({ w: 800, h: 600 });
 
   // LAYERS
   const [activeLayer, setActiveLayer] = React.useState("melody"); // melody | perc
@@ -401,7 +444,12 @@ export default function App() {
     charSz: 22,
     chars: "01",
     charSpd: 2.0,
-    charFollowBpm: true, // NEW
+    charFollowBpm: true,
+
+    // NEW: char-grid rows/cols controls (like swiss)
+    charUseDims: false,
+    charCols: 18,
+    charRows: 12,
 
     // swiss-grid
     cols: 12,
@@ -452,9 +500,12 @@ export default function App() {
     relSpan: 0.85,
 
     voices: 14,
-    melodyOsc: "triangle", // NEW (cleaner default)
+    melodyOsc: "triangle",
 
-    // FX
+    // NEW: smoothing morph time when grid changes
+    morphSec: 0.6,
+
+    // FX (UI restored)
     master: 0.85,
     reverbOn: true,
     reverbMix: 0.22,
@@ -475,14 +526,17 @@ export default function App() {
     percMaxHitsPerStep: 8,
     percBaseMidi: 24,
     percOctaveSpan: 3,
-    percTone: 0.45, // NEW default: more percussive (less body)
+    percTone: 0.45,
     percDecayBase: 0.10,
     percDecaySpan: 0.50,
     percPunch: 0.7,
     percBright: 0.55,
     percDrive: 0.08,
 
-    // NEW: audition
+    // NEW: percussion kit
+    percKit: "classic", // classic | wood | soft
+
+    // audition
     auditionOnPaint: true,
     auditionVel: 0.55,
 
@@ -495,7 +549,7 @@ export default function App() {
     midiHi: 84,
     midiFadeMin: 0.25,
     midiFadeMax: 2.5,
-    midiQuantizeToScale: true, // NEW (fixes “out of tune / noisy feel”)
+    midiQuantizeToScale: true,
   });
 
   const sRef = React.useRef(s);
@@ -541,7 +595,7 @@ export default function App() {
       : Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
   }, [s.pat, s.rows, s.varRowsOn, s.rowFocus, s.rowStrength, s.rowSigma]);
 
-  // IMPORTANT FIX: scheduler uses refs so toggling rows/cols never breaks
+  // IMPORTANT: scheduler uses refs (no stale edges)
   const colEdgesRef = React.useRef(colEdges);
   const rowEdgesRef = React.useRef(rowEdges);
   React.useEffect(() => void (colEdgesRef.current = colEdges), [colEdges]);
@@ -566,6 +620,22 @@ export default function App() {
     return { x, y };
   };
 
+  // NEW: char-grid effective spacing (either slider, or derived from desired rows/cols)
+  const getCharSpacePx = React.useCallback(() => {
+    const st = sRef.current;
+    const { w, h } = canvasPxRef.current || { w: 800, h: 600 };
+    if (!st.charUseDims) return clamp(st.space ?? 42, 8, 400);
+
+    const wantC = clamp(st.charCols ?? 18, 2, 120);
+    const wantR = clamp(st.charRows ?? 12, 2, 120);
+
+    const sx = w / wantC;
+    const sy = h / wantR;
+
+    // choose the smaller so we fit at least wantC×wantR
+    return clamp(Math.floor(Math.min(sx, sy)), 8, 400);
+  }, []);
+
   // index lookup
   const getSwissIdx = React.useCallback(
     (cx, cy) => {
@@ -587,14 +657,15 @@ export default function App() {
     (cx, cy) => {
       const cv = canvasRef.current;
       if (!cv) return null;
-      const cols = Math.max(1, Math.floor(cv.width / s.space));
-      const rows = Math.max(1, Math.floor(cv.height / s.space));
-      const col = Math.floor(cx / s.space);
-      const row = Math.floor(cy / s.space);
+      const spacePx = getCharSpacePx();
+      const cols = Math.max(1, Math.floor(cv.width / spacePx));
+      const rows = Math.max(1, Math.floor(cv.height / spacePx));
+      const col = Math.floor(cx / spacePx);
+      const row = Math.floor(cy / spacePx);
       if (col < 0 || row < 0 || col >= cols || row >= rows) return null;
       return row * cols + col;
     },
-    [s.space]
+    [getCharSpacePx]
   );
 
   const getIdx = React.useCallback(
@@ -678,7 +749,6 @@ export default function App() {
       delay.connect(feedback);
       feedback.connect(delay);
 
-      // buses -> drive -> fx
       melodyBus.connect(drive);
       percBus.connect(drive);
 
@@ -738,9 +808,9 @@ export default function App() {
     A.percBus.gain.setTargetAtTime(clamp(st.percVol ?? 0.85, 0, 1.5), now, 0.02);
     A.master.gain.setTargetAtTime(clamp(st.master, 0, 1.2), now, 0.02);
 
-    // drive (global)
+    // drive
     if (st.driveOn) {
-      const k = clamp(st.drive ?? 0.6, 0, 1) * 40; // slightly gentler
+      const k = clamp(st.drive ?? 0.6, 0, 1) * 40;
       const n = 2048;
       const curve = new Float32Array(n);
       for (let i = 0; i < n; i++) {
@@ -801,14 +871,67 @@ export default function App() {
       return { cols: Math.max(1, st.cols | 0), rows: Math.max(1, st.rows | 0) };
     }
     const cv = canvasRef.current;
+    const spacePx = getCharSpacePx();
     if (cv) {
-      return { cols: Math.max(1, Math.floor(cv.width / st.space)), rows: Math.max(1, Math.floor(cv.height / st.space)) };
+      return { cols: Math.max(1, Math.floor(cv.width / spacePx)), rows: Math.max(1, Math.floor(cv.height / spacePx)), spacePx };
     }
-    return { cols: 16, rows: 12 };
-  }, []);
+    return { cols: 16, rows: 12, spacePx };
+  }, [getCharSpacePx]);
 
   /* =======================
-     Audition on paint (fixes char-grid “silent” feeling)
+     Smooth morph between grid changes
+     - makes pitch/progression changes glide instead of “jump”
+======================= */
+  const morphRef = React.useRef({
+    active: false,
+    t0: 0,
+    dur: 0.6,
+    prev: null,
+  });
+
+  const lastGridRef = React.useRef({
+    pat: s.pat,
+    cols: s.cols,
+    rows: s.rows,
+    space: s.space,
+    charUseDims: s.charUseDims,
+    charCols: s.charCols,
+    charRows: s.charRows,
+  });
+
+  React.useEffect(() => {
+    const st = sRef.current;
+    const cur = {
+      pat: st.pat,
+      cols: st.cols,
+      rows: st.rows,
+      space: st.space,
+      charUseDims: st.charUseDims,
+      charCols: st.charCols,
+      charRows: st.charRows,
+    };
+
+    const prev = lastGridRef.current;
+    const changed =
+      prev.pat !== cur.pat ||
+      prev.cols !== cur.cols ||
+      prev.rows !== cur.rows ||
+      prev.space !== cur.space ||
+      prev.charUseDims !== cur.charUseDims ||
+      prev.charCols !== cur.charCols ||
+      prev.charRows !== cur.charRows;
+
+    if (changed) {
+      morphRef.current.active = true;
+      morphRef.current.t0 = performance.now() * 0.001;
+      morphRef.current.dur = clamp(st.morphSec ?? 0.6, 0.05, 2.0);
+      morphRef.current.prev = prev;
+      lastGridRef.current = cur;
+    }
+  }, [s.pat, s.cols, s.rows, s.space, s.charUseDims, s.charCols, s.charRows, s.morphSec]);
+
+  /* =======================
+     Audition on paint
 ======================= */
   const auditionPaint = React.useCallback((layerKey, row, col, rows, cols, color) => {
     const st = sRef.current;
@@ -820,7 +943,6 @@ export default function App() {
     ensureVoices();
     updateAudioParamsRealtime();
 
-    // build shared scale
     const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
     const scaleMidi = buildScaleMidi({
       rootPc: clamp(st.keyRoot ?? 0, 0, 11),
@@ -853,11 +975,30 @@ export default function App() {
         oscType: st.melodyOsc ?? "triangle",
       });
     } else {
-      // percussion audition: choose type by hue
+      // percussion audition: choose type by hue + kit
       const h = rgb ? hue01(rgb) : 0.4;
-      const type = h < 0.33 ? "kick" : h < 0.66 ? "snare" : "hat";
 
-      // percussion scale (lower range)
+      const kit = st.percKit ?? "classic";
+      const type =
+        kit === "classic"
+          ? h < 0.33
+            ? "kick"
+            : h < 0.66
+            ? "snare"
+            : "hat"
+          : kit === "wood"
+          ? h < 0.33
+            ? "wood"
+            : h < 0.66
+            ? "rim"
+            : "shaker"
+          : // soft
+            h < 0.33
+            ? "tom"
+            : h < 0.66
+            ? "snare"
+            : "shaker";
+
       const percDegreesCount = 7 * clamp(st.percOctaveSpan ?? 3, 1, 7);
       const percScaleMidi = buildScaleMidi({
         rootPc: clamp(st.keyRoot ?? 0, 0, 11),
@@ -903,7 +1044,6 @@ export default function App() {
 
     upsertCellLayer(layerKey, idx, { paint: { mode: "color", color: chosenColor } });
 
-    // audition on paint (fixes “sometimes nothing plays” perception)
     auditionPaint(layerKey === "perc" ? "perc" : "melody", r, c, rows, cols, chosenColor);
   };
 
@@ -919,7 +1059,8 @@ export default function App() {
 
   /* =======================
      Scheduler (melody + perc)
-     FIX: uses edge REFS (no stale edges => no “rows on kills sound”)
+     - uses edge refs
+     - morph smoothing when grid changes
 ======================= */
   function startScheduler() {
     const A = ensureAudio();
@@ -948,7 +1089,9 @@ export default function App() {
       for (const c of percNow) percMap.set(c.idx, c);
 
       const isSwiss = st.pat === "swiss-grid";
-      const { cols, rows } = getGridDims();
+      const dims = getGridDims();
+      const cols = dims.cols;
+      const rows = dims.rows;
 
       // step duration
       const bpm = clamp(st.bpm ?? 120, 30, 260);
@@ -957,9 +1100,7 @@ export default function App() {
 
       // variable columns timing (swiss only)
       if (isSwiss && st.varColsOn) {
-        const ce =
-          colEdgesRef.current ||
-          Array.from({ length: cols + 1 }, (_, i) => i / cols);
+        const ce = colEdgesRef.current || Array.from({ length: cols + 1 }, (_, i) => i / cols);
         const curCol = audioRef.current.step % cols;
         const w = (ce[curCol + 1] ?? (curCol + 1) / cols) - (ce[curCol] ?? curCol / cols);
         const avg = 1 / cols;
@@ -969,11 +1110,48 @@ export default function App() {
 
       const col = audioRef.current.step % cols;
 
-      // harmony
+      // morph amount
+      const nowS = performance.now() * 0.001;
+      let morph = 1;
+      if (morphRef.current.active && morphRef.current.prev) {
+        const t = (nowS - morphRef.current.t0) / Math.max(0.0001, morphRef.current.dur);
+        morph = clamp(t, 0, 1);
+        if (morph >= 1) morphRef.current.active = false;
+      }
+
+      // helpers: compute “old” column/row indices by normalized position
+      const prevSnap = morphRef.current.prev;
+      const getOldRowIndex = (rNow) => {
+        if (!prevSnap) return rNow;
+        const yNorm = rows <= 1 ? 0.5 : (rNow + 0.5) / rows;
+        const oldRows = Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.rows : prevSnap.charRows) | 0);
+        return clamp(Math.floor(yNorm * oldRows), 0, oldRows - 1);
+      };
+      const getOldColIndex = (cNow) => {
+        if (!prevSnap) return cNow;
+        const xNorm = cols <= 1 ? 0.5 : (cNow + 0.5) / cols;
+        const oldCols = Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.cols : prevSnap.charCols) | 0);
+        return clamp(Math.floor(xNorm * oldCols), 0, oldCols - 1);
+      };
+      const blendFreq = (fOld, fNew) => {
+        if (!isFinite(fOld) || fOld <= 0) return fNew;
+        if (!isFinite(fNew) || fNew <= 0) return fOld;
+        // geometric interpolation (smooth pitch glide)
+        const a = Math.log(fOld);
+        const b = Math.log(fNew);
+        return Math.exp(lerp(a, b, morph));
+      };
+
+      // progression/chords are driven by column scan
       const prog = Array.isArray(st.prog) && st.prog.length ? st.prog : [0, 5, 3, 6];
       const progRate = Math.max(1, st.progRate | 0);
-      const chordIndex = Math.floor(col / progRate) % prog.length;
-      const chordDegree = ((prog[chordIndex] | 0) % 7 + 7) % 7;
+
+      const chordIndexNow = Math.floor(col / progRate) % prog.length;
+      const chordDegreeNow = ((prog[chordIndexNow] | 0) % 7 + 7) % 7;
+
+      const oldCol = getOldColIndex(col);
+      const chordIndexOld = Math.floor(oldCol / progRate) % prog.length;
+      const chordDegreeOld = ((prog[chordIndexOld] | 0) % 7 + 7) % 7;
 
       // melody scale set
       const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
@@ -983,7 +1161,9 @@ export default function App() {
         baseMidi: clamp(st.baseMidi ?? 36, 12, 60),
         degreesCount,
       });
-      const chordTones = degreeToChordTones(scaleMidi, chordDegree, st.chordType === "triad" ? "triad" : "7");
+
+      const chordTonesNow = degreeToChordTones(scaleMidi, chordDegreeNow, st.chordType === "triad" ? "triad" : "7");
+      const chordTonesOld = degreeToChordTones(scaleMidi, chordDegreeOld, st.chordType === "triad" ? "triad" : "7");
 
       // percussion scale set
       const percDegreesCount = 7 * clamp(st.percOctaveSpan ?? 3, 1, 7);
@@ -999,8 +1179,6 @@ export default function App() {
           ? rowEdgesRef.current || Array.from({ length: rows + 1 }, (_, i) => i / rows)
           : null;
       const avgRowH = isSwiss ? 1 / rows : 1;
-
-      const nowS = performance.now() * 0.001;
 
       // ===== MELODY
       if (st.soundOn) {
@@ -1020,30 +1198,48 @@ export default function App() {
           const lum = luminance01(rgb);
           const h = hue01(rgb);
 
-          const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
+          const rowNormNow = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
 
-          let lane = 0;
+          const oldR = getOldRowIndex(r);
+          const oldRows = prevSnap
+            ? Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.rows : prevSnap.charRows) | 0)
+            : rows;
+          const rowNormOld = oldRows <= 1 ? 0.5 : 1 - oldR / (oldRows - 1);
+
+          let laneNow = 0;
+          let laneOld = 0;
           if (st.laneMode === "hue") {
-            lane = clamp(Math.floor(h * chordTones.length), 0, chordTones.length - 1);
+            laneNow = clamp(Math.floor(h * chordTonesNow.length), 0, chordTonesNow.length - 1);
+            laneOld = clamp(Math.floor(h * chordTonesOld.length), 0, chordTonesOld.length - 1);
           } else {
-            lane = col % chordTones.length;
+            laneNow = col % chordTonesNow.length;
+            laneOld = oldCol % chordTonesOld.length;
           }
 
-          const degIdx = clamp(Math.round(rowNorm * (degreesCount - 1)), 0, degreesCount - 1);
-          const rowMidi = scaleMidi[degIdx];
+          const degIdxNow = clamp(Math.round(rowNormNow * (degreesCount - 1)), 0, degreesCount - 1);
+          const rowMidiNow = scaleMidi[degIdxNow];
 
-          let target = chordTones[lane];
-          while (target < rowMidi - 6) target += 12;
-          while (target > rowMidi + 6) target -= 12;
+          const degIdxOld = clamp(Math.round(rowNormOld * (degreesCount - 1)), 0, degreesCount - 1);
+          const rowMidiOld = scaleMidi[degIdxOld];
 
-          const freq = midiToFreq(target);
+          let targetNow = chordTonesNow[laneNow];
+          while (targetNow < rowMidiNow - 6) targetNow += 12;
+          while (targetNow > rowMidiNow + 6) targetNow -= 12;
+
+          let targetOld = chordTonesOld[laneOld];
+          while (targetOld < rowMidiOld - 6) targetOld += 12;
+          while (targetOld > rowMidiOld + 6) targetOld -= 12;
+
+          const fNow = midiToFreq(targetNow);
+          const fOld = midiToFreq(targetOld);
+          const freq = morph < 1 ? blendFreq(fOld, fNow) : fNow;
 
           const vel = st.velFrom === "fixed" ? 0.55 : clamp(0.08 + 0.92 * lum, 0.05, 1);
           const cutoff = (st.cutoffBase ?? 400) + (st.cutoffSpan ?? 7200) * clamp(0.15 + 0.85 * lum, 0, 1);
 
-          let attack = (st.atkBase ?? 0.008) + (st.atkSpan ?? 0.09) * clamp(1 - rowNorm, 0, 1);
+          let attack = (st.atkBase ?? 0.008) + (st.atkSpan ?? 0.09) * clamp(1 - rowNormNow, 0, 1);
           let decay = (st.decBase ?? 0.08) + (st.decSpan ?? 0.65) * clamp(lum, 0, 1);
-          let release = (st.relBase ?? 0.06) + (st.relSpan ?? 0.85) * clamp(rowNorm, 0, 1);
+          let release = (st.relBase ?? 0.06) + (st.relSpan ?? 0.85) * clamp(rowNormNow, 0, 1);
 
           if (isSwiss && st.varRowsOn && re) {
             const rh = (re[r + 1] ?? (r + 1) / rows) - (re[r] ?? r / rows);
@@ -1098,24 +1294,55 @@ export default function App() {
           const lum = luminance01(rgb);
           const h = hue01(rgb);
 
-          // map hue to a drum type (feels like a “kit”)
-          const type = h < 0.33 ? "kick" : h < 0.66 ? "snare" : "hat";
+          const kit = st.percKit ?? "classic";
+          const type =
+            kit === "classic"
+              ? h < 0.33
+                ? "kick"
+                : h < 0.66
+                ? "snare"
+                : "hat"
+              : kit === "wood"
+              ? h < 0.33
+                ? "wood"
+                : h < 0.66
+                ? "rim"
+                : "shaker"
+              : // soft
+                h < 0.33
+                ? "tom"
+                : h < 0.66
+                ? "snare"
+                : "shaker";
 
-          const rowNorm = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
+          const rowNormNow = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
 
-          // choose a quantized pitch along perc scale
-          const degIdx = clamp(Math.round(rowNorm * (percDegreesCount - 1)), 0, percDegreesCount - 1);
-          let midi = percScaleMidi[degIdx];
+          const oldR = getOldRowIndex(r);
+          const oldRows = prevSnap
+            ? Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.rows : prevSnap.charRows) | 0)
+            : rows;
+          const rowNormOld = oldRows <= 1 ? 0.5 : 1 - oldR / (oldRows - 1);
 
-          // tiny variation but still in scale
+          const degIdxNow = clamp(Math.round(rowNormNow * (percDegreesCount - 1)), 0, percDegreesCount - 1);
+          const degIdxOld = clamp(Math.round(rowNormOld * (percDegreesCount - 1)), 0, percDegreesCount - 1);
+
+          let midiNow = percScaleMidi[degIdxNow];
+          let midiOld = percScaleMidi[degIdxOld];
+
           const wig = Math.round((h - 0.5) * 4);
-          midi = percScaleMidi[clamp(degIdx + wig, 0, percDegreesCount - 1)] ?? midi;
-          midi = quantizeToScale(midi, percScaleMidi);
+          midiNow = percScaleMidi[clamp(degIdxNow + wig, 0, percDegreesCount - 1)] ?? midiNow;
+          midiOld = percScaleMidi[clamp(degIdxOld + wig, 0, percDegreesCount - 1)] ?? midiOld;
 
-          const freq = midiToFreq(midi);
+          midiNow = quantizeToScale(midiNow, percScaleMidi);
+          midiOld = quantizeToScale(midiOld, percScaleMidi);
+
+          const fNow = midiToFreq(midiNow);
+          const fOld = midiToFreq(midiOld);
+          const freq = morph < 1 ? blendFreq(fOld, fNow) : fNow;
+
           const vel = clamp(0.12 + 0.88 * lum, 0.05, 1);
 
-          let decay = (st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * clamp((1 - rowNorm) * 0.7 + lum * 0.5, 0, 1);
+          let decay = (st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * clamp((1 - rowNormNow) * 0.7 + lum * 0.5, 0, 1);
 
           if (isSwiss && st.varRowsOn && re) {
             const rh = (re[r + 1] ?? (r + 1) / rows) - (re[r] ?? r / rows);
@@ -1178,7 +1405,6 @@ export default function App() {
 
   /* =======================
      MIDI (Web MIDI API)
-     FIX: MIDI-thru quantized to key/scale (cleaner + “always in tune”)
 ======================= */
   const [midiSupported, setMidiSupported] = React.useState(false);
   const [midiInputs, setMidiInputs] = React.useState([]);
@@ -1281,7 +1507,6 @@ export default function App() {
 
     let midi = note;
 
-    // Quantize MIDI to current key/scale (fixes “not precise / noisy” vibe)
     if (st.midiQuantizeToScale) {
       const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
       const scaleMidi = buildScaleMidi({
@@ -1291,8 +1516,6 @@ export default function App() {
         degreesCount,
       });
 
-      // extend around note range by shifting octaves
-      // find nearest by adding +/- octaves of scale set
       const candidates = [];
       for (let k = -6; k <= 6; k++) {
         for (const m of scaleMidi) candidates.push(m + 12 * k);
@@ -1303,7 +1526,6 @@ export default function App() {
 
     const freq = midiToFreq(midi);
 
-    // cleaner MIDI-thru envelope
     const attack = 0.002 + (1 - vel01) * 0.01;
     const decay = 0.07 + vel01 * 0.25;
     const release = 0.09 + (1 - vel01) * 0.22;
@@ -1406,6 +1628,7 @@ export default function App() {
 
     const st = sRef.current;
     let cols, rows;
+
     if (st.pat === "swiss-grid") {
       cols = st.cols;
       rows = st.rows;
@@ -1414,10 +1637,11 @@ export default function App() {
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     } else {
-      cols = Math.max(1, Math.floor(cv.width / st.space));
-      rows = Math.max(1, Math.floor(cv.height / st.space));
-      const col = Math.floor(x / st.space);
-      const row = Math.floor(y / st.space);
+      const spacePx = getCharSpacePx();
+      cols = Math.max(1, Math.floor(cv.width / spacePx));
+      rows = Math.max(1, Math.floor(cv.height / spacePx));
+      const col = Math.floor(x / spacePx);
+      const row = Math.floor(y / spacePx);
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     }
@@ -1433,6 +1657,7 @@ export default function App() {
 
     const st = sRef.current;
     let cols, rows;
+
     if (st.pat === "swiss-grid") {
       cols = st.cols;
       rows = st.rows;
@@ -1441,10 +1666,11 @@ export default function App() {
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     } else {
-      cols = Math.max(1, Math.floor(cv.width / st.space));
-      rows = Math.max(1, Math.floor(cv.height / st.space));
-      const col = Math.floor(x / st.space);
-      const row = Math.floor(y / st.space);
+      const spacePx = getCharSpacePx();
+      cols = Math.max(1, Math.floor(cv.width / spacePx));
+      rows = Math.max(1, Math.floor(cv.height / spacePx));
+      const col = Math.floor(x / spacePx);
+      const row = Math.floor(y / spacePx);
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     }
@@ -1487,20 +1713,21 @@ export default function App() {
       if (!s.gridLines) return;
 
       if (s.pat === "char-grid") {
-        const cols = Math.max(1, Math.floor(w / s.space));
-        const rows = Math.max(1, Math.floor(h / s.space));
+        const spacePx = getCharSpacePx();
+        const cols = Math.max(1, Math.floor(w / spacePx));
+        const rows = Math.max(1, Math.floor(h / spacePx));
         ctx.save();
         ctx.strokeStyle = gridLineChar;
         ctx.lineWidth = 1;
         for (let c = 0; c <= cols; c++) {
-          const x = c * s.space;
+          const x = c * spacePx;
           ctx.beginPath();
           ctx.moveTo(x, 0);
           ctx.lineTo(x, h);
           ctx.stroke();
         }
         for (let r = 0; r <= rows; r++) {
-          const y = r * s.space;
+          const y = r * spacePx;
           ctx.beginPath();
           ctx.moveTo(0, y);
           ctx.lineTo(w, y);
@@ -1537,7 +1764,6 @@ export default function App() {
     const charSpeed = (() => {
       const base = s.charSpd ?? 2;
       if (!s.charFollowBpm) return base;
-      // tie to bpm in a musical way
       return base * (clamp(s.bpm ?? 120, 30, 260) / 120);
     })();
 
@@ -1549,16 +1775,17 @@ export default function App() {
       const spd = charSpeed * (s.pat === "char-grid" ? 0.9 : 0.85);
 
       if (s.pat === "char-grid") {
-        const cols = Math.max(1, Math.floor(w / s.space));
-        const rows = Math.max(1, Math.floor(h / s.space));
+        const spacePx = getCharSpacePx();
+        const cols = Math.max(1, Math.floor(w / spacePx));
+        const rows = Math.max(1, Math.floor(h / spacePx));
 
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
             const idx = r * cols + c;
-            const x0 = c * s.space;
-            const y0 = r * s.space;
-            const cx = x0 + s.space / 2;
-            const cy = y0 + s.space / 2;
+            const x0 = c * spacePx;
+            const y0 = r * spacePx;
+            const cx = x0 + spacePx / 2;
+            const cy = y0 + spacePx / 2;
 
             const entry = map.get(idx);
             const col = entry?.paint?.color;
@@ -1574,7 +1801,7 @@ export default function App() {
               ctx.save();
               ctx.globalAlpha = 0.92 * a * alphaMul;
               ctx.fillStyle = col;
-              ctx.fillRect(x0, y0, s.space, s.space);
+              ctx.fillRect(x0, y0, spacePx, spacePx);
               ctx.restore();
             }
 
@@ -1632,7 +1859,6 @@ export default function App() {
 
     // ghost mode: draw active layer full + other layer ghosted
     if (layerView === "ghost") {
-      const other = activeLayer === "melody" ? "perc" : "melody";
       if (activeLayer === "melody") {
         drawLayerCells(melMap, 1.0);
         drawLayerCells(percMap, clamp(ghostOpacity, 0, 1));
@@ -1667,7 +1893,7 @@ export default function App() {
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s, cellsMel, cellsPerc, colEdges, rowEdges, activeLayer, layerView, ghostOpacity, isDark]);
+  }, [s, cellsMel, cellsPerc, colEdges, rowEdges, activeLayer, layerView, ghostOpacity, isDark, getCharSpacePx]);
 
   // resize canvas
   React.useEffect(() => {
@@ -1676,6 +1902,7 @@ export default function App() {
       if (!cv) return;
       cv.width = Math.max(1, Math.floor(cv.offsetWidth));
       cv.height = Math.max(1, Math.floor(cv.offsetHeight));
+      canvasPxRef.current = { w: cv.width, h: cv.height };
     };
     rsz();
     window.addEventListener("resize", rsz);
@@ -1709,6 +1936,33 @@ export default function App() {
   const buttonPrimary = isDark ? "bg-white text-black hover:bg-neutral-200" : "bg-black text-white hover:bg-neutral-800";
   const buttonDark = isDark ? "bg-neutral-100 text-black hover:bg-white" : "bg-neutral-900 text-white hover:bg-black";
   const buttonMuted = isDark ? "bg-neutral-800 text-neutral-100" : "bg-neutral-200 text-neutral-700";
+
+  // progression helpers (minimal, but editable)
+  const progStr = (Array.isArray(s.prog) ? s.prog : [0, 5, 3, 6]).join(",");
+
+  const setProgFromString = (str) => {
+    const parts = String(str)
+      .split(/[,\s]+/)
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .map((x) => parseInt(x, 10))
+      .filter((n) => Number.isFinite(n));
+    const cleaned = parts.length ? parts.map((n) => clamp(n, -20, 20)) : [0, 5, 3, 6];
+    setS((p) => ({ ...p, prog: cleaned }));
+  };
+
+  const setProgressionPreset = (name) => {
+    const presets = {
+      "i–VI–III–VII": [0, 5, 3, 6],
+      "i–VII–VI–VII": [0, 6, 5, 6],
+      "i–iv–v–i": [0, 3, 4, 0],
+      "i–VI–VII–i": [0, 5, 6, 0],
+      "vi–IV–I–V (major)": [5, 3, 0, 4],
+      "I–V–vi–IV (major)": [0, 4, 5, 3],
+    };
+    const next = presets[name] ?? [0, 5, 3, 6];
+    setS((p) => ({ ...p, prog: next }));
+  };
 
   return (
     <div className={`w-full h-[100svh] ${shellBg} flex flex-col md:flex-row overflow-hidden`}>
@@ -1774,6 +2028,19 @@ export default function App() {
             <option value="swiss-grid">Swiss Grid</option>
             <option value="char-grid">Character Grid</option>
           </select>
+
+          <div className="space-y-1">
+            <div className={`text-xs ${subtleText}`}>Grid-change smoothing: {s.morphSec.toFixed(2)}s</div>
+            <input
+              type="range"
+              min="0.05"
+              max="1.5"
+              step="0.05"
+              value={s.morphSec}
+              onChange={(e) => setS((p) => ({ ...p, morphSec: parseFloat(e.target.value) }))}
+              className="w-full"
+            />
+          </div>
         </div>
 
         {/* Layer controls */}
@@ -1970,8 +2237,49 @@ export default function App() {
 
         {s.pat === "char-grid" && (
           <div className="space-y-2">
+            {/* existing spacing */}
             <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
             <input type="range" min="12" max="120" value={s.space} onChange={(e) => setS((p) => ({ ...p, space: parseInt(e.target.value, 10) }))} className="w-full" />
+
+            {/* NEW: rows/cols controls like swiss grid */}
+            <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wider">Rows & Cols controls</div>
+                <button
+                  onClick={() => setS((p) => ({ ...p, charUseDims: !p.charUseDims }))}
+                  className={`p-1.5 rounded ${s.charUseDims ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+                  title="Use desired rows/cols"
+                >
+                  {s.charUseDims ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+                </button>
+              </div>
+
+              <div className={`text-[11px] ${subtleText}`}>
+                When ON, spacing is derived from target <b>Cols × Rows</b> (still smooth-morphs in audio).
+              </div>
+
+              <label className="block text-xs font-semibold uppercase tracking-wider">Cols: {s.charCols}</label>
+              <input
+                type="range"
+                min="4"
+                max="60"
+                value={s.charCols}
+                onChange={(e) => setS((p) => ({ ...p, charCols: parseInt(e.target.value, 10) }))}
+                className="w-full"
+                disabled={!s.charUseDims}
+              />
+
+              <label className="block text-xs font-semibold uppercase tracking-wider">Rows: {s.charRows}</label>
+              <input
+                type="range"
+                min="4"
+                max="60"
+                value={s.charRows}
+                onChange={(e) => setS((p) => ({ ...p, charRows: parseInt(e.target.value, 10) }))}
+                className="w-full"
+                disabled={!s.charUseDims}
+              />
+            </div>
 
             <label className="block text-xs font-semibold uppercase tracking-wider">Char Size: {s.charSz}px</label>
             <input type="range" min="8" max="80" value={s.charSz} onChange={(e) => setS((p) => ({ ...p, charSz: parseInt(e.target.value, 10) }))} className="w-full" />
@@ -2025,6 +2333,9 @@ export default function App() {
           <label className="block text-xs font-semibold uppercase tracking-wider">BPM: {s.bpm}</label>
           <input type="range" min="40" max="220" value={s.bpm} onChange={(e) => setS((p) => ({ ...p, bpm: parseInt(e.target.value, 10) }))} className="w-full" />
 
+          <label className="block text-xs font-semibold uppercase tracking-wider">Max notes / step: {s.maxNotesPerStep}</label>
+          <input type="range" min="1" max="24" value={s.maxNotesPerStep} onChange={(e) => setS((p) => ({ ...p, maxNotesPerStep: parseInt(e.target.value, 10) }))} className="w-full" />
+
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
               <div className={`text-xs ${subtleText}`}>Key</div>
@@ -2058,9 +2369,54 @@ export default function App() {
             </select>
           </div>
 
+          {/* NEW: progression controls */}
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider">Progression</div>
+
+            <select
+              onChange={(e) => setProgressionPreset(e.target.value)}
+              className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+              defaultValue=""
+            >
+              <option value="" disabled>
+                Pick a preset…
+              </option>
+              <option value="i–VI–III–VII">i–VI–III–VII</option>
+              <option value="i–VII–VI–VII">i–VII–VI–VII</option>
+              <option value="i–iv–v–i">i–iv–v–i</option>
+              <option value="i–VI–VII–i">i–VI–VII–i</option>
+              <option value="vi–IV–I–V (major)">vi–IV–I–V (major)</option>
+              <option value="I–V–vi–IV (major)">I–V–vi–IV (major)</option>
+            </select>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Degrees (comma-separated)</div>
+              <input
+                type="text"
+                value={progStr}
+                onChange={(e) => setProgFromString(e.target.value)}
+                className={`w-full px-2 py-2 border rounded-lg text-xs font-mono ${inputBg}`}
+                placeholder="0,5,3,6"
+              />
+              <div className={`text-[11px] ${subtleText}`}>These are scale degrees (0–6) but you can go beyond; it wraps.</div>
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Rate (columns per chord): {s.progRate}</div>
+              <input
+                type="range"
+                min="1"
+                max="16"
+                value={s.progRate}
+                onChange={(e) => setS((p) => ({ ...p, progRate: parseInt(e.target.value, 10) }))}
+                className="w-full"
+              />
+            </div>
+          </div>
+
           <div className={`text-[11px] ${subtleText}`}>
-            <b>Always in tune:</b> everything is quantized to {keyName} {s.scaleName}.<br />
-            <b>Top = higher</b>, <b>bottom = lower</b> (melody + drums).
+            <b>How it plays:</b> the engine scans <b>left → right</b> one column per step. Each painted cell in the current column becomes a note.
+            Notes are chosen from the current <b>chord</b> (progression above) and mapped <b>top = higher</b>, <b>bottom = lower</b>. Everything is quantized to {keyName} {s.scaleName}.
           </div>
         </div>
 
@@ -2074,6 +2430,19 @@ export default function App() {
             >
               {s.percOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
             </button>
+          </div>
+
+          <div className="space-y-1">
+            <div className={`text-xs ${subtleText}`}>Kit</div>
+            <select
+              value={s.percKit}
+              onChange={(e) => setS((p) => ({ ...p, percKit: e.target.value }))}
+              className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+            >
+              <option value="classic">Classic (kick/snare/hat)</option>
+              <option value="wood">Wood (wood/rim/shaker)</option>
+              <option value="soft">Soft (tom/snare/shaker)</option>
+            </select>
           </div>
 
           <label className="block text-xs font-semibold uppercase tracking-wider">Max hits / step: {s.percMaxHitsPerStep}</label>
@@ -2116,7 +2485,60 @@ export default function App() {
           </div>
 
           <div className={`text-[11px] ${subtleText}`}>
-            Hue chooses drum type: <b>kick / snare / hat</b>. Pitch parts are quantized to the scale.
+            Hue chooses drum type inside the kit. Pitch parts are quantized to the same scale.
+          </div>
+        </div>
+
+        {/* FX (restored) */}
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider">FX</label>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Reverb</div>
+              <button
+                onClick={() => setS((p) => ({ ...p, reverbOn: !p.reverbOn }))}
+                className={`p-1.5 rounded ${s.reverbOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              >
+                {s.reverbOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+              </button>
+            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Mix: {s.reverbMix.toFixed(2)}</label>
+            <input type="range" min="0" max="0.8" step="0.01" value={s.reverbMix} onChange={(e) => setS((p) => ({ ...p, reverbMix: parseFloat(e.target.value) }))} className="w-full" />
+            <label className="block text-xs font-semibold uppercase tracking-wider">Time: {s.reverbTime.toFixed(1)}s</label>
+            <input type="range" min="0.5" max="6" step="0.1" value={s.reverbTime} onChange={(e) => setS((p) => ({ ...p, reverbTime: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Delay</div>
+              <button
+                onClick={() => setS((p) => ({ ...p, delayOn: !p.delayOn }))}
+                className={`p-1.5 rounded ${s.delayOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              >
+                {s.delayOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+              </button>
+            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Mix: {s.delayMix.toFixed(2)}</label>
+            <input type="range" min="0" max="0.8" step="0.01" value={s.delayMix} onChange={(e) => setS((p) => ({ ...p, delayMix: parseFloat(e.target.value) }))} className="w-full" />
+            <label className="block text-xs font-semibold uppercase tracking-wider">Time: {s.delayTime.toFixed(2)}s</label>
+            <input type="range" min="0.05" max="0.9" step="0.01" value={s.delayTime} onChange={(e) => setS((p) => ({ ...p, delayTime: parseFloat(e.target.value) }))} className="w-full" />
+            <label className="block text-xs font-semibold uppercase tracking-wider">Feedback: {s.delayFeedback.toFixed(2)}</label>
+            <input type="range" min="0" max="0.85" step="0.01" value={s.delayFeedback} onChange={(e) => setS((p) => ({ ...p, delayFeedback: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Drive</div>
+              <button
+                onClick={() => setS((p) => ({ ...p, driveOn: !p.driveOn }))}
+                className={`p-1.5 rounded ${s.driveOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              >
+                {s.driveOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+              </button>
+            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Amount: {s.drive.toFixed(2)}</label>
+            <input type="range" min="0" max="1" step="0.01" value={s.drive} onChange={(e) => setS((p) => ({ ...p, drive: parseFloat(e.target.value) }))} className="w-full" />
           </div>
         </div>
 
