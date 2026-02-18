@@ -67,7 +67,7 @@ function rgbToHex({ r, g, b }) {
 }
 
 /* =======================
-   Variable grid density
+   Variable grid density (edges)
 ======================= */
 const gaussian = (x, sigma) => {
   const s2 = sigma * sigma || 1e-6;
@@ -210,11 +210,11 @@ function triggerVoice(ac, voice, { freq, vel, cutoffHz, attack, decaySec, releas
   g.cancelScheduledValues(now);
 
   g.setValueAtTime(0.0, now);
-  g.linearRampToValueAtTime(v, now + clamp(attack, 0.001, 0.2));
-  g.exponentialRampToValueAtTime(0.00001, now + clamp(attack, 0.001, 0.2) + clamp(decaySec, 0.02, 2.5));
+  g.linearRampToValueAtTime(v, now + clamp(attack, 0.001, 0.25));
+  g.exponentialRampToValueAtTime(0.00001, now + clamp(attack, 0.001, 0.25) + clamp(decaySec, 0.02, 3.0));
   g.linearRampToValueAtTime(
     0.0,
-    now + clamp(attack, 0.001, 0.2) + clamp(decaySec, 0.02, 2.5) + clamp(release, 0.02, 2.5)
+    now + clamp(attack, 0.001, 0.25) + clamp(decaySec, 0.02, 3.0) + clamp(release, 0.02, 3.0)
   );
 }
 
@@ -239,6 +239,7 @@ function triggerPerc(ac, dest, opts) {
     bright = 0.5,
     punch = 0.65,
     driveAmt = 0.0,
+    acoustic = false,
   } = opts;
 
   const now = ac.currentTime;
@@ -252,7 +253,7 @@ function triggerPerc(ac, dest, opts) {
   {
     const nC = 2048;
     const curve = new Float32Array(nC);
-    const k = clamp(driveAmt, 0, 1) * 28;
+    const k = clamp(driveAmt, 0, 1) * (acoustic ? 12 : 28);
     for (let i = 0; i < nC; i++) {
       const x = (i * 2) / (nC - 1) - 1;
       curve[i] = k > 0.001 ? Math.tanh(x * (1 + k)) : x;
@@ -267,15 +268,15 @@ function triggerPerc(ac, dest, opts) {
 
   const clickHP = ac.createBiquadFilter();
   clickHP.type = "highpass";
-  clickHP.frequency.setValueAtTime(type === "hat" || type === "shaker" ? 6000 : 2000, now);
+  clickHP.frequency.setValueAtTime(type === "hat" || type === "shaker" ? 6500 : 2200, now);
 
   const clickGain = ac.createGain();
   clickGain.gain.setValueAtTime(0.0, now);
   clickGain.gain.linearRampToValueAtTime(
-    (type === "wood" || type === "rim" ? 0.55 : 0.35) * v * (0.5 + punch),
+    (type === "wood" || type === "rim" ? 0.55 : acoustic ? 0.22 : 0.35) * v * (0.5 + punch),
     now + 0.001
   );
-  clickGain.gain.exponentialRampToValueAtTime(0.00001, now + (type === "shaker" ? 0.035 : 0.02));
+  clickGain.gain.exponentialRampToValueAtTime(0.00001, now + (type === "shaker" ? 0.04 : 0.02));
 
   click.connect(clickHP);
   clickHP.connect(clickGain);
@@ -288,14 +289,13 @@ function triggerPerc(ac, dest, opts) {
 
   const noiseBP = ac.createBiquadFilter();
   noiseBP.type = "bandpass";
-  noiseBP.Q.value = clamp(4 + punch * 10, 4, 22);
+  noiseBP.Q.value = clamp((acoustic ? 6 : 4) + punch * 10, 4, 24);
 
-  // kit-ish centers
   const noiseCenter =
     type === "hat" || type === "shaker"
       ? lerp(6500, 12000, bright)
       : type === "snare"
-      ? lerp(1400, 4200, bright)
+      ? lerp(acoustic ? 1100 : 1400, acoustic ? 3200 : 4200, bright)
       : type === "wood" || type === "rim"
       ? lerp(900, 3200, bright)
       : lerp(300, 2000, bright);
@@ -312,14 +312,14 @@ function triggerPerc(ac, dest, opts) {
   const noiseGain = ac.createGain();
   const noiseAmt =
     type === "kick"
-      ? 0.12
+      ? acoustic ? 0.09 : 0.12
       : type === "tom"
       ? 0.18
       : type === "snare"
-      ? 0.75
+      ? acoustic ? 0.55 : 0.75
       : type === "wood" || type === "rim"
       ? 0.35
-      : 0.95;
+      : acoustic ? 0.75 : 0.95;
 
   noiseGain.gain.setValueAtTime(0.0, now);
   noiseGain.gain.linearRampToValueAtTime(noiseAmt * v * (1 - tone), now + 0.002);
@@ -331,7 +331,7 @@ function triggerPerc(ac, dest, opts) {
 
   // body
   const body = ac.createOscillator();
-  body.type = type === "wood" || type === "rim" ? "triangle" : "sine";
+  body.type = type === "wood" || type === "rim" ? "triangle" : acoustic ? "triangle" : "sine";
 
   const f0 = clamp(freq, 35, 6000);
   const drop =
@@ -341,37 +341,39 @@ function triggerPerc(ac, dest, opts) {
       ? lerp(1.2, 2.0, punch)
       : type === "wood" || type === "rim"
       ? lerp(1.05, 1.35, punch)
-      : 1.02;
+      : acoustic ? lerp(1.01, 1.05, punch) : 1.02;
 
-  body.frequency.setValueAtTime(f0 * drop, now);
-  body.frequency.exponentialRampToValueAtTime(f0, now + (type === "kick" ? 0.04 : type === "wood" ? 0.015 : 0.03));
+  // small “human” drift for acoustic feel
+  const drift = acoustic ? (Math.random() * 2 - 1) * 0.006 : 0;
+  body.frequency.setValueAtTime(f0 * drop * (1 + drift), now);
+  body.frequency.exponentialRampToValueAtTime(f0 * (1 + drift * 0.25), now + (type === "kick" ? 0.04 : type === "wood" ? 0.015 : 0.03));
 
   const bodyGain = ac.createGain();
   const bodyAmt =
     type === "kick"
-      ? 1.0
+      ? acoustic ? 0.92 : 1.0
       : type === "tom"
       ? 0.85
       : type === "snare"
-      ? 0.25
+      ? acoustic ? 0.34 : 0.25
       : type === "wood" || type === "rim"
       ? 0.55
       : type === "shaker"
       ? 0.05
-      : 0.12;
+      : acoustic ? 0.10 : 0.12;
 
-  const a = type === "wood" || type === "rim" ? 0.0009 : 0.0015;
-  const d = clamp(decay, 0.03, 1.8) * (type === "wood" || type === "rim" ? 0.55 : 1.0);
+  const a = type === "wood" || type === "rim" ? 0.0009 : acoustic ? 0.0022 : 0.0015;
+  const d = clamp(decay, 0.03, 1.8) * (type === "wood" || type === "rim" ? 0.55 : acoustic ? 1.25 : 1.0);
 
   bodyGain.gain.setValueAtTime(0.0, now);
   bodyGain.gain.linearRampToValueAtTime(bodyAmt * v * tone, now + a);
   bodyGain.gain.exponentialRampToValueAtTime(0.00001, now + d);
 
-  // “wood” extra resonator: bandpass on the sum for a woody knock
+  // “wood” extra resonator
   const woodRes = ac.createBiquadFilter();
   woodRes.type = "bandpass";
-  woodRes.Q.value = type === "wood" || type === "rim" ? 18 : 1;
-  woodRes.frequency.setValueAtTime(type === "wood" || type === "rim" ? clamp(f0 * lerp(1.6, 2.8, bright), 350, 6500) : 1000, now);
+  woodRes.Q.value = type === "wood" || type === "rim" ? 18 : acoustic ? 10 : 1;
+  woodRes.frequency.setValueAtTime(type === "wood" || type === "rim" ? clamp(f0 * lerp(1.6, 2.8, bright), 350, 6500) : clamp(f0 * 2.2, 220, 7000), now);
 
   // sum
   clickGain.connect(out);
@@ -379,7 +381,7 @@ function triggerPerc(ac, dest, opts) {
   body.connect(bodyGain);
   bodyGain.connect(out);
 
-  if (type === "wood" || type === "rim") {
+  if (type === "wood" || type === "rim" || acoustic) {
     out.connect(woodRes);
     woodRes.connect(shaper);
   } else {
@@ -439,17 +441,27 @@ export default function App() {
   const [s, setS] = React.useState({
     pat: "swiss-grid", // swiss-grid | char-grid
 
-    // char-grid
+    // char-grid (base)
     space: 42,
     charSz: 22,
     chars: "01",
     charSpd: 2.0,
     charFollowBpm: true,
 
-    // NEW: char-grid rows/cols controls (like swiss)
+    // char-grid rows/cols controls
     charUseDims: false,
     charCols: 18,
     charRows: 12,
+
+    // NEW: char-grid variable density (non-uniform edges)
+    charVarColsOn: false,
+    charColFocus: 0.5,
+    charColStrength: 6,
+    charColSigma: 0.18,
+    charVarRowsOn: false,
+    charRowFocus: 0.5,
+    charRowStrength: 6,
+    charRowSigma: 0.18,
 
     // swiss-grid
     cols: 12,
@@ -457,12 +469,11 @@ export default function App() {
     gridLines: true,
     swissCharScale: 1.0,
 
-    // variable density
+    // swiss variable density
     varColsOn: false,
     colFocus: 0.5,
     colStrength: 6,
     colSigma: 0.18,
-
     varRowsOn: false,
     rowFocus: 0.5,
     rowStrength: 6,
@@ -483,7 +494,8 @@ export default function App() {
     scaleName: "naturalMinor",
     baseMidi: 36,
     octaveSpan: 4,
-    chordType: "7",
+
+    chordType: "7", // triad | 7
     prog: [0, 5, 3, 6],
     progRate: 4,
 
@@ -492,6 +504,7 @@ export default function App() {
     cutoffBase: 400,
     cutoffSpan: 7200,
 
+    // ADSR controls (you asked for shaping controls)
     atkBase: 0.008,
     atkSpan: 0.09,
     decBase: 0.08,
@@ -502,10 +515,10 @@ export default function App() {
     voices: 14,
     melodyOsc: "triangle",
 
-    // NEW: smoothing morph time when grid changes
+    // smoothing morph time when grid changes
     morphSec: 0.6,
 
-    // FX (UI restored)
+    // FX
     master: 0.85,
     reverbOn: true,
     reverbMix: 0.22,
@@ -533,8 +546,8 @@ export default function App() {
     percBright: 0.55,
     percDrive: 0.08,
 
-    // NEW: percussion kit
-    percKit: "classic", // classic | wood | soft
+    // percussion kit
+    percKit: "classic", // classic | wood | soft | acoustic
 
     // audition
     auditionOnPaint: true,
@@ -580,7 +593,9 @@ export default function App() {
     [s.colorSeqBehave, s.colorSeqSpeed]
   );
 
-  // variable edges (for rendering)
+  /* =======================
+     Swiss edges (render + scheduler)
+======================= */
   const colEdges = React.useMemo(() => {
     if (s.pat !== "swiss-grid") return null;
     return s.varColsOn
@@ -595,7 +610,7 @@ export default function App() {
       : Array.from({ length: s.rows + 1 }, (_, i) => i / s.rows);
   }, [s.pat, s.rows, s.varRowsOn, s.rowFocus, s.rowStrength, s.rowSigma]);
 
-  // IMPORTANT: scheduler uses refs (no stale edges)
+  // scheduler uses refs (no stale edges)
   const colEdgesRef = React.useRef(colEdges);
   const rowEdgesRef = React.useRef(rowEdges);
   React.useEffect(() => void (colEdgesRef.current = colEdges), [colEdges]);
@@ -611,6 +626,62 @@ export default function App() {
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
   }
 
+  /* =======================
+     Char-grid effective dims + edges (NEW variable density)
+======================= */
+  const computeCharEffDims = React.useCallback((st) => {
+    const { w, h } = canvasPxRef.current || { w: 800, h: 600 };
+    if (st.charUseDims) {
+      return { cols: clamp(st.charCols ?? 18, 2, 120) | 0, rows: clamp(st.charRows ?? 12, 2, 120) | 0 };
+    }
+    const space = clamp(st.space ?? 42, 8, 400);
+    return { cols: Math.max(1, Math.floor(w / space)), rows: Math.max(1, Math.floor(h / space)) };
+  }, []);
+
+  const charEdges = React.useMemo(() => {
+    if (s.pat !== "char-grid") return null;
+    const { cols, rows } = computeCharEffDims(s);
+
+    const ce = s.charVarColsOn
+      ? buildVariableEdges(cols, s.charColFocus, s.charColStrength, s.charColSigma)
+      : Array.from({ length: cols + 1 }, (_, i) => i / cols);
+
+    const re = s.charVarRowsOn
+      ? buildVariableEdges(rows, s.charRowFocus, s.charRowStrength, s.charRowSigma)
+      : Array.from({ length: rows + 1 }, (_, i) => i / rows);
+
+    return { cols, rows, ce, re };
+  }, [
+    s.pat,
+    s.space,
+    s.charUseDims,
+    s.charCols,
+    s.charRows,
+    s.charVarColsOn,
+    s.charColFocus,
+    s.charColStrength,
+    s.charColSigma,
+    s.charVarRowsOn,
+    s.charRowFocus,
+    s.charRowStrength,
+    s.charRowSigma,
+    computeCharEffDims,
+  ]);
+
+  const charEdgesRef = React.useRef(charEdges);
+  React.useEffect(() => void (charEdgesRef.current = charEdges), [charEdges]);
+
+  function charCellGeom(r, c, w, h) {
+    const CE = charEdgesRef.current;
+    const ce = CE?.ce ?? Array.from({ length: (CE?.cols ?? 16) + 1 }, (_, i) => i / (CE?.cols ?? 16));
+    const re = CE?.re ?? Array.from({ length: (CE?.rows ?? 12) + 1 }, (_, i) => i / (CE?.rows ?? 12));
+    const x0 = ce[c] * w;
+    const x1 = ce[c + 1] * w;
+    const y0 = re[r] * h;
+    const y1 = re[r + 1] * h;
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+  }
+
   // pointer to canvas coords
   const pointerToCanvas = (e) => {
     const cv = canvasRef.current;
@@ -619,22 +690,6 @@ export default function App() {
     const y = (e.clientY - r.top) * (cv.height / r.height);
     return { x, y };
   };
-
-  // NEW: char-grid effective spacing (either slider, or derived from desired rows/cols)
-  const getCharSpacePx = React.useCallback(() => {
-    const st = sRef.current;
-    const { w, h } = canvasPxRef.current || { w: 800, h: 600 };
-    if (!st.charUseDims) return clamp(st.space ?? 42, 8, 400);
-
-    const wantC = clamp(st.charCols ?? 18, 2, 120);
-    const wantR = clamp(st.charRows ?? 12, 2, 120);
-
-    const sx = w / wantC;
-    const sy = h / wantR;
-
-    // choose the smaller so we fit at least wantC×wantR
-    return clamp(Math.floor(Math.min(sx, sy)), 8, 400);
-  }, []);
 
   // index lookup
   const getSwissIdx = React.useCallback(
@@ -653,20 +708,22 @@ export default function App() {
     [s.cols, s.rows, colEdges, rowEdges]
   );
 
-  const getCharGridIdx = React.useCallback(
-    (cx, cy) => {
-      const cv = canvasRef.current;
-      if (!cv) return null;
-      const spacePx = getCharSpacePx();
-      const cols = Math.max(1, Math.floor(cv.width / spacePx));
-      const rows = Math.max(1, Math.floor(cv.height / spacePx));
-      const col = Math.floor(cx / spacePx);
-      const row = Math.floor(cy / spacePx);
-      if (col < 0 || row < 0 || col >= cols || row >= rows) return null;
-      return row * cols + col;
-    },
-    [getCharSpacePx]
-  );
+  const getCharGridIdx = React.useCallback((cx, cy) => {
+    const cv = canvasRef.current;
+    if (!cv) return null;
+    const CE = charEdgesRef.current;
+    const cols = CE?.cols ?? 16;
+    const rows = CE?.rows ?? 12;
+    const ce = CE?.ce ?? Array.from({ length: cols + 1 }, (_, i) => i / cols);
+    const re = CE?.re ?? Array.from({ length: rows + 1 }, (_, i) => i / rows);
+
+    const x01 = cx / cv.width;
+    const y01 = cy / cv.height;
+    const col = findIndexFromEdges(ce, x01);
+    const row = findIndexFromEdges(re, y01);
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return null;
+    return row * cols + col;
+  }, []);
 
   const getIdx = React.useCallback(
     (cx, cy) => {
@@ -870,17 +927,14 @@ export default function App() {
     if (st.pat === "swiss-grid") {
       return { cols: Math.max(1, st.cols | 0), rows: Math.max(1, st.rows | 0) };
     }
-    const cv = canvasRef.current;
-    const spacePx = getCharSpacePx();
-    if (cv) {
-      return { cols: Math.max(1, Math.floor(cv.width / spacePx)), rows: Math.max(1, Math.floor(cv.height / spacePx)), spacePx };
-    }
-    return { cols: 16, rows: 12, spacePx };
-  }, [getCharSpacePx]);
+    const CE = charEdgesRef.current;
+    if (CE) return { cols: CE.cols, rows: CE.rows };
+    const { cols, rows } = computeCharEffDims(st);
+    return { cols, rows };
+  }, [computeCharEffDims]);
 
   /* =======================
      Smooth morph between grid changes
-     - makes pitch/progression changes glide instead of “jump”
 ======================= */
   const morphRef = React.useRef({
     active: false,
@@ -897,10 +951,33 @@ export default function App() {
     charUseDims: s.charUseDims,
     charCols: s.charCols,
     charRows: s.charRows,
+    charEffCols: computeCharEffDims(s).cols,
+    charEffRows: computeCharEffDims(s).rows,
+
+    // include density params so density shifts glide too
+    varColsOn: s.varColsOn,
+    colFocus: s.colFocus,
+    colStrength: s.colStrength,
+    colSigma: s.colSigma,
+    varRowsOn: s.varRowsOn,
+    rowFocus: s.rowFocus,
+    rowStrength: s.rowStrength,
+    rowSigma: s.rowSigma,
+
+    charVarColsOn: s.charVarColsOn,
+    charColFocus: s.charColFocus,
+    charColStrength: s.charColStrength,
+    charColSigma: s.charColSigma,
+    charVarRowsOn: s.charVarRowsOn,
+    charRowFocus: s.charRowFocus,
+    charRowStrength: s.charRowStrength,
+    charRowSigma: s.charRowSigma,
   });
 
   React.useEffect(() => {
     const st = sRef.current;
+    const eff = computeCharEffDims(st);
+
     const cur = {
       pat: st.pat,
       cols: st.cols,
@@ -909,17 +986,30 @@ export default function App() {
       charUseDims: st.charUseDims,
       charCols: st.charCols,
       charRows: st.charRows,
+      charEffCols: eff.cols,
+      charEffRows: eff.rows,
+
+      varColsOn: st.varColsOn,
+      colFocus: st.colFocus,
+      colStrength: st.colStrength,
+      colSigma: st.colSigma,
+      varRowsOn: st.varRowsOn,
+      rowFocus: st.rowFocus,
+      rowStrength: st.rowStrength,
+      rowSigma: st.rowSigma,
+
+      charVarColsOn: st.charVarColsOn,
+      charColFocus: st.charColFocus,
+      charColStrength: st.charColStrength,
+      charColSigma: st.charColSigma,
+      charVarRowsOn: st.charVarRowsOn,
+      charRowFocus: st.charRowFocus,
+      charRowStrength: st.charRowStrength,
+      charRowSigma: st.charRowSigma,
     };
 
     const prev = lastGridRef.current;
-    const changed =
-      prev.pat !== cur.pat ||
-      prev.cols !== cur.cols ||
-      prev.rows !== cur.rows ||
-      prev.space !== cur.space ||
-      prev.charUseDims !== cur.charUseDims ||
-      prev.charCols !== cur.charCols ||
-      prev.charRows !== cur.charRows;
+    const changed = Object.keys(cur).some((k) => cur[k] !== prev[k]);
 
     if (changed) {
       morphRef.current.active = true;
@@ -928,7 +1018,36 @@ export default function App() {
       morphRef.current.prev = prev;
       lastGridRef.current = cur;
     }
-  }, [s.pat, s.cols, s.rows, s.space, s.charUseDims, s.charCols, s.charRows, s.morphSec]);
+  }, [
+    s.pat,
+    s.cols,
+    s.rows,
+    s.space,
+    s.charUseDims,
+    s.charCols,
+    s.charRows,
+    s.morphSec,
+
+    s.varColsOn,
+    s.colFocus,
+    s.colStrength,
+    s.colSigma,
+    s.varRowsOn,
+    s.rowFocus,
+    s.rowStrength,
+    s.rowSigma,
+
+    s.charVarColsOn,
+    s.charColFocus,
+    s.charColStrength,
+    s.charColSigma,
+    s.charVarRowsOn,
+    s.charRowFocus,
+    s.charRowStrength,
+    s.charRowSigma,
+
+    computeCharEffDims,
+  ]);
 
   /* =======================
      Audition on paint
@@ -975,12 +1094,11 @@ export default function App() {
         oscType: st.melodyOsc ?? "triangle",
       });
     } else {
-      // percussion audition: choose type by hue + kit
       const h = rgb ? hue01(rgb) : 0.4;
 
       const kit = st.percKit ?? "classic";
       const type =
-        kit === "classic"
+        kit === "classic" || kit === "acoustic"
           ? h < 0.33
             ? "kick"
             : h < 0.66
@@ -1010,15 +1128,17 @@ export default function App() {
       const pm = percScaleMidi[clamp(Math.round(rowNorm * (percDegreesCount - 1)), 0, percDegreesCount - 1)];
       const freq = midiToFreq(pm);
 
+      const acoustic = kit === "acoustic";
       triggerPerc(A.ac, A.percBus, {
         type,
         freq,
         vel,
-        decay: clamp((st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * (1 - rowNorm), 0.03, 1.2),
+        decay: clamp((st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * (1 - rowNorm), 0.03, 1.2) * (acoustic ? 1.15 : 1),
         tone: clamp(st.percTone ?? 0.45, 0, 1),
         bright: clamp(st.percBright ?? 0.55, 0, 1),
-        punch: clamp(st.percPunch ?? 0.7, 0, 1),
-        driveAmt: clamp(st.percDrive ?? 0.08, 0, 1),
+        punch: clamp(st.percPunch ?? 0.7, 0, 1) * (acoustic ? 0.92 : 1),
+        driveAmt: clamp(st.percDrive ?? 0.08, 0, 1) * (acoustic ? 0.35 : 1),
+        acoustic,
       });
     }
   }, []);
@@ -1059,8 +1179,6 @@ export default function App() {
 
   /* =======================
      Scheduler (melody + perc)
-     - uses edge refs
-     - morph smoothing when grid changes
 ======================= */
   function startScheduler() {
     const A = ensureAudio();
@@ -1119,30 +1237,35 @@ export default function App() {
         if (morph >= 1) morphRef.current.active = false;
       }
 
-      // helpers: compute “old” column/row indices by normalized position
+      // old snapshot mapping
       const prevSnap = morphRef.current.prev;
       const getOldRowIndex = (rNow) => {
         if (!prevSnap) return rNow;
         const yNorm = rows <= 1 ? 0.5 : (rNow + 0.5) / rows;
-        const oldRows = Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.rows : prevSnap.charRows) | 0);
+        const oldRows =
+          prevSnap.pat === "swiss-grid"
+            ? Math.max(1, (prevSnap.rows | 0))
+            : Math.max(1, (prevSnap.charEffRows | 0));
         return clamp(Math.floor(yNorm * oldRows), 0, oldRows - 1);
       };
       const getOldColIndex = (cNow) => {
         if (!prevSnap) return cNow;
         const xNorm = cols <= 1 ? 0.5 : (cNow + 0.5) / cols;
-        const oldCols = Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.cols : prevSnap.charCols) | 0);
+        const oldCols =
+          prevSnap.pat === "swiss-grid"
+            ? Math.max(1, (prevSnap.cols | 0))
+            : Math.max(1, (prevSnap.charEffCols | 0));
         return clamp(Math.floor(xNorm * oldCols), 0, oldCols - 1);
       };
       const blendFreq = (fOld, fNew) => {
         if (!isFinite(fOld) || fOld <= 0) return fNew;
         if (!isFinite(fNew) || fNew <= 0) return fOld;
-        // geometric interpolation (smooth pitch glide)
         const a = Math.log(fOld);
         const b = Math.log(fNew);
         return Math.exp(lerp(a, b, morph));
       };
 
-      // progression/chords are driven by column scan
+      // progression / chords
       const prog = Array.isArray(st.prog) && st.prog.length ? st.prog : [0, 5, 3, 6];
       const progRate = Math.max(1, st.progRate | 0);
 
@@ -1153,7 +1276,6 @@ export default function App() {
       const chordIndexOld = Math.floor(oldCol / progRate) % prog.length;
       const chordDegreeOld = ((prog[chordIndexOld] | 0) % 7 + 7) % 7;
 
-      // melody scale set
       const degreesCount = 7 * clamp(st.octaveSpan ?? 4, 1, 7);
       const scaleMidi = buildScaleMidi({
         rootPc: clamp(st.keyRoot ?? 0, 0, 11),
@@ -1201,9 +1323,13 @@ export default function App() {
           const rowNormNow = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
 
           const oldR = getOldRowIndex(r);
-          const oldRows = prevSnap
-            ? Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.rows : prevSnap.charRows) | 0)
-            : rows;
+          const oldRows =
+            prevSnap
+              ? prevSnap.pat === "swiss-grid"
+                ? Math.max(1, (prevSnap.rows | 0))
+                : Math.max(1, (prevSnap.charEffRows | 0))
+              : rows;
+
           const rowNormOld = oldRows <= 1 ? 0.5 : 1 - oldR / (oldRows - 1);
 
           let laneNow = 0;
@@ -1250,9 +1376,9 @@ export default function App() {
             attack *= clamp(1.25 - (tailMul - 1) * 0.4, 0.5, 1.4);
           }
 
-          attack = clamp(attack, 0.002, 0.2);
-          decay = clamp(decay, 0.03, 2.0);
-          release = clamp(release, 0.03, 2.6);
+          attack = clamp(attack, 0.002, 0.25);
+          decay = clamp(decay, 0.03, 2.8);
+          release = clamp(release, 0.03, 2.8);
 
           hits.push({ freq, vel, cutoff, attack, decay, release, score: vel });
         }
@@ -1295,8 +1421,10 @@ export default function App() {
           const h = hue01(rgb);
 
           const kit = st.percKit ?? "classic";
+          const acoustic = kit === "acoustic";
+
           const type =
-            kit === "classic"
+            kit === "classic" || kit === "acoustic"
               ? h < 0.33
                 ? "kick"
                 : h < 0.66
@@ -1318,9 +1446,12 @@ export default function App() {
           const rowNormNow = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
 
           const oldR = getOldRowIndex(r);
-          const oldRows = prevSnap
-            ? Math.max(1, (prevSnap.pat === "swiss-grid" ? prevSnap.rows : prevSnap.charRows) | 0)
-            : rows;
+          const oldRows =
+            prevSnap
+              ? prevSnap.pat === "swiss-grid"
+                ? Math.max(1, (prevSnap.rows | 0))
+                : Math.max(1, (prevSnap.charEffRows | 0))
+              : rows;
           const rowNormOld = oldRows <= 1 ? 0.5 : 1 - oldR / (oldRows - 1);
 
           const degIdxNow = clamp(Math.round(rowNormNow * (percDegreesCount - 1)), 0, percDegreesCount - 1);
@@ -1350,7 +1481,7 @@ export default function App() {
             decay *= clamp(ratio, 0.65, 1.7);
           }
 
-          decay = clamp(decay, 0.03, 1.5);
+          decay = clamp(decay, 0.03, 1.7) * (acoustic ? 1.15 : 1);
 
           hits.push({
             type,
@@ -1358,9 +1489,10 @@ export default function App() {
             vel,
             decay,
             tone: clamp(st.percTone ?? 0.45, 0, 1),
-            punch: clamp(st.percPunch ?? 0.7, 0, 1),
+            punch: clamp(st.percPunch ?? 0.7, 0, 1) * (acoustic ? 0.92 : 1),
             bright: clamp((st.percBright ?? 0.55) * (0.6 + lum * 0.6), 0, 1),
-            driveAmt: clamp(st.percDrive ?? 0.08, 0, 1),
+            driveAmt: clamp(st.percDrive ?? 0.08, 0, 1) * (acoustic ? 0.35 : 1),
+            acoustic,
             score: vel,
           });
         }
@@ -1378,6 +1510,7 @@ export default function App() {
             punch: h.punch,
             bright: h.bright,
             driveAmt: h.driveAmt,
+            acoustic: h.acoustic,
           });
         }
       }
@@ -1627,21 +1760,21 @@ export default function App() {
     if (idx == null) return;
 
     const st = sRef.current;
-    let cols, rows;
 
     if (st.pat === "swiss-grid") {
-      cols = st.cols;
-      rows = st.rows;
+      const cols = st.cols;
+      const rows = st.rows;
       const col = idx % st.cols;
       const row = Math.floor(idx / st.cols);
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     } else {
-      const spacePx = getCharSpacePx();
-      cols = Math.max(1, Math.floor(cv.width / spacePx));
-      rows = Math.max(1, Math.floor(cv.height / spacePx));
-      const col = Math.floor(x / spacePx);
-      const row = Math.floor(y / spacePx);
+      // char-grid using edges
+      const CE = charEdgesRef.current;
+      const cols = CE?.cols ?? 16;
+      const rows = CE?.rows ?? 12;
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     }
@@ -1656,21 +1789,20 @@ export default function App() {
     if (idx == null) return;
 
     const st = sRef.current;
-    let cols, rows;
 
     if (st.pat === "swiss-grid") {
-      cols = st.cols;
-      rows = st.rows;
+      const cols = st.cols;
+      const rows = st.rows;
       const col = idx % st.cols;
       const row = Math.floor(idx / st.cols);
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     } else {
-      const spacePx = getCharSpacePx();
-      cols = Math.max(1, Math.floor(cv.width / spacePx));
-      rows = Math.max(1, Math.floor(cv.height / spacePx));
-      const col = Math.floor(x / spacePx);
-      const row = Math.floor(y / spacePx);
+      const CE = charEdgesRef.current;
+      const cols = CE?.cols ?? 16;
+      const rows = CE?.rows ?? 12;
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     }
@@ -1713,21 +1845,25 @@ export default function App() {
       if (!s.gridLines) return;
 
       if (s.pat === "char-grid") {
-        const spacePx = getCharSpacePx();
-        const cols = Math.max(1, Math.floor(w / spacePx));
-        const rows = Math.max(1, Math.floor(h / spacePx));
+        const CE = charEdgesRef.current;
+        const cols = CE?.cols ?? 16;
+        const rows = CE?.rows ?? 12;
+        const ce = CE?.ce ?? Array.from({ length: cols + 1 }, (_, i) => i / cols);
+        const re = CE?.re ?? Array.from({ length: rows + 1 }, (_, i) => i / rows);
+
         ctx.save();
         ctx.strokeStyle = gridLineChar;
         ctx.lineWidth = 1;
+
         for (let c = 0; c <= cols; c++) {
-          const x = c * spacePx;
+          const x = (ce[c] ?? c / cols) * w;
           ctx.beginPath();
           ctx.moveTo(x, 0);
           ctx.lineTo(x, h);
           ctx.stroke();
         }
         for (let r = 0; r <= rows; r++) {
-          const y = r * spacePx;
+          const y = (re[r] ?? r / rows) * h;
           ctx.beginPath();
           ctx.moveTo(0, y);
           ctx.lineTo(w, y);
@@ -1775,17 +1911,14 @@ export default function App() {
       const spd = charSpeed * (s.pat === "char-grid" ? 0.9 : 0.85);
 
       if (s.pat === "char-grid") {
-        const spacePx = getCharSpacePx();
-        const cols = Math.max(1, Math.floor(w / spacePx));
-        const rows = Math.max(1, Math.floor(h / spacePx));
+        const CE = charEdgesRef.current;
+        const cols = CE?.cols ?? 16;
+        const rows = CE?.rows ?? 12;
 
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
             const idx = r * cols + c;
-            const x0 = c * spacePx;
-            const y0 = r * spacePx;
-            const cx = x0 + spacePx / 2;
-            const cy = y0 + spacePx / 2;
+            const g = charCellGeom(r, c, w, h);
 
             const entry = map.get(idx);
             const col = entry?.paint?.color;
@@ -1801,16 +1934,17 @@ export default function App() {
               ctx.save();
               ctx.globalAlpha = 0.92 * a * alphaMul;
               ctx.fillStyle = col;
-              ctx.fillRect(x0, y0, spacePx, spacePx);
+              ctx.fillRect(g.x, g.y, g.w, g.h);
               ctx.restore();
             }
 
             const gi = chs.length ? Math.floor((t * spd + r * 0.07 + c * 0.05) * 3) % chs.length : 0;
+            const sz = Math.max(8, Math.min(g.w, g.h) * 0.58);
             ctx.save();
             ctx.globalAlpha = alphaMul * (col ? 1 : 0.95);
-            ctx.font = `${s.charSz}px ${getFontFamily()}`;
+            ctx.font = `${Math.floor(sz)}px ${getFontFamily()}`;
             ctx.fillStyle = col ? paintedText : baseText;
-            ctx.fillText(chs[gi] ?? "0", cx, cy);
+            ctx.fillText(chs[gi] ?? "0", g.cx, g.cy);
             ctx.restore();
           }
         }
@@ -1857,7 +1991,6 @@ export default function App() {
 
     drawGrid();
 
-    // ghost mode: draw active layer full + other layer ghosted
     if (layerView === "ghost") {
       if (activeLayer === "melody") {
         drawLayerCells(melMap, 1.0);
@@ -1880,7 +2013,6 @@ export default function App() {
       return;
     }
 
-    // active only
     if (activeLayer === "melody") drawLayerCells(melMap, 1.0);
     else drawLayerCells(percMap, 1.0);
   };
@@ -1893,7 +2025,7 @@ export default function App() {
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s, cellsMel, cellsPerc, colEdges, rowEdges, activeLayer, layerView, ghostOpacity, isDark, getCharSpacePx]);
+  }, [s, cellsMel, cellsPerc, colEdges, rowEdges, activeLayer, layerView, ghostOpacity, isDark]);
 
   // resize canvas
   React.useEffect(() => {
@@ -1937,7 +2069,7 @@ export default function App() {
   const buttonDark = isDark ? "bg-neutral-100 text-black hover:bg-white" : "bg-neutral-900 text-white hover:bg-black";
   const buttonMuted = isDark ? "bg-neutral-800 text-neutral-100" : "bg-neutral-200 text-neutral-700";
 
-  // progression helpers (minimal, but editable)
+  // progression helpers
   const progStr = (Array.isArray(s.prog) ? s.prog : [0, 5, 3, 6]).join(",");
 
   const setProgFromString = (str) => {
@@ -1951,17 +2083,28 @@ export default function App() {
     setS((p) => ({ ...p, prog: cleaned }));
   };
 
+  const PROG_PRESETS = {
+    "i–VI–III–VII": [0, 5, 3, 6],
+    "i–VII–VI–VII": [0, 6, 5, 6],
+    "i–iv–v–i": [0, 3, 4, 0],
+    "i–VI–VII–i": [0, 5, 6, 0],
+    "vi–IV–I–V (major)": [5, 3, 0, 4],
+    "I–V–vi–IV (major)": [0, 4, 5, 3],
+    "ii–V–I–vi (major-ish)": [1, 4, 0, 5],
+    "i–bVII–bVI–V (minor)": [0, 6, 5, 4],
+    "i–iv–VI–V": [0, 3, 5, 4],
+    "I–iii–IV–V (major)": [0, 2, 3, 4],
+  };
+
   const setProgressionPreset = (name) => {
-    const presets = {
-      "i–VI–III–VII": [0, 5, 3, 6],
-      "i–VII–VI–VII": [0, 6, 5, 6],
-      "i–iv–v–i": [0, 3, 4, 0],
-      "i–VI–VII–i": [0, 5, 6, 0],
-      "vi–IV–I–V (major)": [5, 3, 0, 4],
-      "I–V–vi–IV (major)": [0, 4, 5, 3],
-    };
-    const next = presets[name] ?? [0, 5, 3, 6];
+    const next = PROG_PRESETS[name] ?? [0, 5, 3, 6];
     setS((p) => ({ ...p, prog: next }));
+  };
+
+  const randomizeProgression = () => {
+    const keys = Object.keys(PROG_PRESETS);
+    const pick = keys[Math.floor(Math.random() * keys.length)];
+    setProgressionPreset(pick);
   };
 
   return (
@@ -2237,11 +2380,9 @@ export default function App() {
 
         {s.pat === "char-grid" && (
           <div className="space-y-2">
-            {/* existing spacing */}
-            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing: {s.space}px</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Spacing (base): {s.space}px</label>
             <input type="range" min="12" max="120" value={s.space} onChange={(e) => setS((p) => ({ ...p, space: parseInt(e.target.value, 10) }))} className="w-full" />
 
-            {/* NEW: rows/cols controls like swiss grid */}
             <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
               <div className="flex items-center justify-between">
                 <div className="text-xs font-semibold uppercase tracking-wider">Rows & Cols controls</div>
@@ -2255,14 +2396,14 @@ export default function App() {
               </div>
 
               <div className={`text-[11px] ${subtleText}`}>
-                When ON, spacing is derived from target <b>Cols × Rows</b> (still smooth-morphs in audio).
+                When ON, grid uses target <b>Cols × Rows</b>. Density warping still works.
               </div>
 
               <label className="block text-xs font-semibold uppercase tracking-wider">Cols: {s.charCols}</label>
               <input
                 type="range"
                 min="4"
-                max="60"
+                max="80"
                 value={s.charCols}
                 onChange={(e) => setS((p) => ({ ...p, charCols: parseInt(e.target.value, 10) }))}
                 className="w-full"
@@ -2273,12 +2414,59 @@ export default function App() {
               <input
                 type="range"
                 min="4"
-                max="60"
+                max="80"
                 value={s.charRows}
                 onChange={(e) => setS((p) => ({ ...p, charRows: parseInt(e.target.value, 10) }))}
                 className="w-full"
                 disabled={!s.charUseDims}
               />
+            </div>
+
+            {/* NEW: variable density for char-grid */}
+            <label className="block text-xs font-semibold uppercase tracking-wider">Variable Grid Density (Char Grid)</label>
+
+            <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wider">Columns warp</div>
+                <button
+                  onClick={() => setS((p) => ({ ...p, charVarColsOn: !p.charVarColsOn }))}
+                  className={`p-1.5 rounded ${s.charVarColsOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+                >
+                  {s.charVarColsOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+                </button>
+              </div>
+              {s.charVarColsOn && (
+                <>
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Focus X: {s.charColFocus.toFixed(2)}</label>
+                  <input type="range" min="0" max="1" step="0.01" value={s.charColFocus} onChange={(e) => setS((p) => ({ ...p, charColFocus: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Strength: {s.charColStrength.toFixed(1)}</label>
+                  <input type="range" min="0" max="20" step="0.1" value={s.charColStrength} onChange={(e) => setS((p) => ({ ...p, charColStrength: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Band Width: {s.charColSigma.toFixed(2)}</label>
+                  <input type="range" min="0.05" max="0.5" step="0.01" value={s.charColSigma} onChange={(e) => setS((p) => ({ ...p, charColSigma: parseFloat(e.target.value) }))} className="w-full" />
+                </>
+              )}
+            </div>
+
+            <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wider">Rows warp</div>
+                <button
+                  onClick={() => setS((p) => ({ ...p, charVarRowsOn: !p.charVarRowsOn }))}
+                  className={`p-1.5 rounded ${s.charVarRowsOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+                >
+                  {s.charVarRowsOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+                </button>
+              </div>
+              {s.charVarRowsOn && (
+                <>
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Focus Y: {s.charRowFocus.toFixed(2)}</label>
+                  <input type="range" min="0" max="1" step="0.01" value={s.charRowFocus} onChange={(e) => setS((p) => ({ ...p, charRowFocus: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Strength: {s.charRowStrength.toFixed(1)}</label>
+                  <input type="range" min="0" max="20" step="0.1" value={s.charRowStrength} onChange={(e) => setS((p) => ({ ...p, charRowStrength: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Band Width: {s.charRowSigma.toFixed(2)}</label>
+                  <input type="range" min="0.05" max="0.5" step="0.01" value={s.charRowSigma} onChange={(e) => setS((p) => ({ ...p, charRowSigma: parseFloat(e.target.value) }))} className="w-full" />
+                </>
+              )}
             </div>
 
             <label className="block text-xs font-semibold uppercase tracking-wider">Char Size: {s.charSz}px</label>
@@ -2369,9 +2557,23 @@ export default function App() {
             </select>
           </div>
 
+          {/* NEW: chord mode */}
+          <div className="space-y-1">
+            <div className={`text-xs ${subtleText}`}>Chord mode</div>
+            <select value={s.chordType} onChange={(e) => setS((p) => ({ ...p, chordType: e.target.value }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
+              <option value="triad">Triads (3 notes)</option>
+              <option value="7">7ths (4 notes)</option>
+            </select>
+          </div>
+
           {/* NEW: progression controls */}
           <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
-            <div className="text-xs font-semibold uppercase tracking-wider">Progression</div>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Progression</div>
+              <button onClick={randomizeProgression} className={`px-3 py-1.5 rounded text-xs font-semibold ${buttonMuted}`}>
+                Random
+              </button>
+            </div>
 
             <select
               onChange={(e) => setProgressionPreset(e.target.value)}
@@ -2381,12 +2583,11 @@ export default function App() {
               <option value="" disabled>
                 Pick a preset…
               </option>
-              <option value="i–VI–III–VII">i–VI–III–VII</option>
-              <option value="i–VII–VI–VII">i–VII–VI–VII</option>
-              <option value="i–iv–v–i">i–iv–v–i</option>
-              <option value="i–VI–VII–i">i–VI–VII–i</option>
-              <option value="vi–IV–I–V (major)">vi–IV–I–V (major)</option>
-              <option value="I–V–vi–IV (major)">I–V–vi–IV (major)</option>
+              {Object.keys(PROG_PRESETS).map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
             </select>
 
             <div className="space-y-1">
@@ -2398,7 +2599,7 @@ export default function App() {
                 className={`w-full px-2 py-2 border rounded-lg text-xs font-mono ${inputBg}`}
                 placeholder="0,5,3,6"
               />
-              <div className={`text-[11px] ${subtleText}`}>These are scale degrees (0–6) but you can go beyond; it wraps.</div>
+              <div className={`text-[11px] ${subtleText}`}>Scale degrees (0–6). Values outside wrap.</div>
             </div>
 
             <div className="space-y-1">
@@ -2414,9 +2615,50 @@ export default function App() {
             </div>
           </div>
 
+          {/* NEW: Melody shaping (ADSR + filter) */}
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider">Melody shaping</div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Cutoff base: {Math.round(s.cutoffBase)} Hz</div>
+              <input type="range" min="80" max="6000" step="10" value={s.cutoffBase} onChange={(e) => setS((p) => ({ ...p, cutoffBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Cutoff span: {Math.round(s.cutoffSpan)} Hz</div>
+              <input type="range" min="0" max="12000" step="10" value={s.cutoffSpan} onChange={(e) => setS((p) => ({ ...p, cutoffSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack base: {s.atkBase.toFixed(3)}s</div>
+              <input type="range" min="0.001" max="0.08" step="0.001" value={s.atkBase} onChange={(e) => setS((p) => ({ ...p, atkBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack span: {s.atkSpan.toFixed(3)}s</div>
+              <input type="range" min="0" max="0.25" step="0.001" value={s.atkSpan} onChange={(e) => setS((p) => ({ ...p, atkSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay base: {s.decBase.toFixed(3)}s</div>
+              <input type="range" min="0.02" max="0.6" step="0.005" value={s.decBase} onChange={(e) => setS((p) => ({ ...p, decBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay span: {s.decSpan.toFixed(3)}s</div>
+              <input type="range" min="0" max="2.0" step="0.01" value={s.decSpan} onChange={(e) => setS((p) => ({ ...p, decSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release base: {s.relBase.toFixed(3)}s</div>
+              <input type="range" min="0.02" max="0.8" step="0.01" value={s.relBase} onChange={(e) => setS((p) => ({ ...p, relBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release span: {s.relSpan.toFixed(3)}s</div>
+              <input type="range" min="0" max="2.0" step="0.01" value={s.relSpan} onChange={(e) => setS((p) => ({ ...p, relSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
+
           <div className={`text-[11px] ${subtleText}`}>
-            <b>How it plays:</b> the engine scans <b>left → right</b> one column per step. Each painted cell in the current column becomes a note.
-            Notes are chosen from the current <b>chord</b> (progression above) and mapped <b>top = higher</b>, <b>bottom = lower</b>. Everything is quantized to {keyName} {s.scaleName}.
+            <b>How it plays:</b> it scans <b>left → right</b> one column per step. Painted cells in the current column become notes.
+            Notes are chosen from the current <b>chord</b> and mapped <b>top = higher</b>, <b>bottom = lower</b>. Quantized to {keyName} {s.scaleName}.
           </div>
         </div>
 
@@ -2440,6 +2682,7 @@ export default function App() {
               className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
             >
               <option value="classic">Classic (kick/snare/hat)</option>
+              <option value="acoustic">Acoustic (softer/woodier)</option>
               <option value="wood">Wood (wood/rim/shaker)</option>
               <option value="soft">Soft (tom/snare/shaker)</option>
             </select>
@@ -2448,48 +2691,143 @@ export default function App() {
           <label className="block text-xs font-semibold uppercase tracking-wider">Max hits / step: {s.percMaxHitsPerStep}</label>
           <input type="range" min="1" max="24" value={s.percMaxHitsPerStep} onChange={(e) => setS((p) => ({ ...p, percMaxHitsPerStep: parseInt(e.target.value, 10) }))} className="w-full" />
 
-          <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Base MIDI</div>
-              <input type="number" min="0" max="96" value={s.percBaseMidi} onChange={(e) => setS((p) => ({ ...p, percBaseMidi: parseInt(e.target.value || "24", 10) }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`} />
-            </div>
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Octaves</div>
-              <input type="number" min="1" max="7" value={s.percOctaveSpan} onChange={(e) => setS((p) => ({ ...p, percOctaveSpan: parseInt(e.target.value || "3", 10) }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`} />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <div className={`text-xs ${subtleText}`}>Tone (noise → body): {s.percTone.toFixed(2)}</div>
-            <input type="range" min="0" max="1" step="0.01" value={s.percTone} onChange={(e) => setS((p) => ({ ...p, percTone: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="space-y-1">
-            <div className={`text-xs ${subtleText}`}>Punch: {s.percPunch.toFixed(2)}</div>
-            <input type="range" min="0" max="1" step="0.01" value={s.percPunch} onChange={(e) => setS((p) => ({ ...p, percPunch: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="space-y-1">
-            <div className={`text-xs ${subtleText}`}>Brightness: {s.percBright.toFixed(2)}</div>
-            <input type="range" min="0" max="1" step="0.01" value={s.percBright} onChange={(e) => setS((p) => ({ ...p, percBright: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="space-y-1">
-            <div className={`text-xs ${subtleText}`}>Decay base: {s.percDecayBase.toFixed(2)}s</div>
-            <input type="range" min="0.02" max="0.6" step="0.01" value={s.percDecayBase} onChange={(e) => setS((p) => ({ ...p, percDecayBase: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="space-y-1">
-            <div className={`text-xs ${subtleText}`}>Decay span: {s.percDecaySpan.toFixed(2)}s</div>
-            <input type="range" min="0" max="1.2" step="0.01" value={s.percDecaySpan} onChange={(e) => setS((p) => ({ ...p, percDecaySpan: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="space-y-1">
-            <div className={`text-xs ${subtleText}`}>Perc drive: {s.percDrive.toFixed(2)}</div>
-            <input type="range" min="0" max="1" step="0.01" value={s.percDrive} onChange={(e) => setS((p) => ({ ...p, percDrive: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-
           <div className={`text-[11px] ${subtleText}`}>
-            Hue chooses drum type inside the kit. Pitch parts are quantized to the same scale.
+            Hue chooses drum type inside the kit. Acoustic kit uses softer drive + more resonance.
           </div>
         </div>
 
-        {/* FX (restored) */}
+        {/* MIDI (NEW UI so you can actually see it's there) */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wider">MIDI</label>
+            <button
+              onClick={() => setS((p) => ({ ...p, midiOn: !p.midiOn }))}
+              className={`p-1.5 rounded ${s.midiOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              title="Toggle MIDI"
+            >
+              {s.midiOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+            </button>
+          </div>
+
+          <div className={`text-[11px] ${subtleText}`}>
+            {midiSupported ? "Web MIDI supported ✅" : "Web MIDI not supported in this browser ❌"}
+          </div>
+
+          {midiSupported && (
+            <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Input</div>
+                <select
+                  value={midiInputId}
+                  onChange={(e) => setMidiInputId(e.target.value)}
+                  className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                  disabled={!s.midiOn}
+                >
+                  {midiInputs.length === 0 && <option value="">No inputs</option>}
+                  {midiInputs.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setS((p) => ({ ...p, midiDraw: !p.midiDraw }))}
+                  className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
+                    s.midiDraw
+                      ? isDark
+                        ? "bg-white text-black border-white"
+                        : "bg-black text-white border-black"
+                      : inputBg
+                  }`}
+                  disabled={!s.midiOn}
+                >
+                  Draw to grid
+                </button>
+                <button
+                  onClick={() => setS((p) => ({ ...p, midiThru: !p.midiThru }))}
+                  className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
+                    s.midiThru
+                      ? isDark
+                        ? "bg-white text-black border-white"
+                        : "bg-black text-white border-black"
+                      : inputBg
+                  }`}
+                  disabled={!s.midiOn}
+                >
+                  Thru sound
+                </button>
+              </div>
+
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Channel (-1 = any)</div>
+                <input
+                  type="number"
+                  min={-1}
+                  max={15}
+                  value={s.midiChannel}
+                  onChange={(e) => setS((p) => ({ ...p, midiChannel: parseInt(e.target.value || "-1", 10) }))}
+                  className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                  disabled={!s.midiOn}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <div className={`text-xs ${subtleText}`}>Note low</div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={127}
+                    value={s.midiLo}
+                    onChange={(e) => setS((p) => ({ ...p, midiLo: parseInt(e.target.value || "0", 10) }))}
+                    className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                    disabled={!s.midiOn}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className={`text-xs ${subtleText}`}>Note high</div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={127}
+                    value={s.midiHi}
+                    onChange={(e) => setS((p) => ({ ...p, midiHi: parseInt(e.target.value || "127", 10) }))}
+                    className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                    disabled={!s.midiOn}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Fade min: {s.midiFadeMin.toFixed(2)}s</div>
+                <input type="range" min="0.05" max="3" step="0.01" value={s.midiFadeMin} onChange={(e) => setS((p) => ({ ...p, midiFadeMin: parseFloat(e.target.value) }))} className="w-full" disabled={!s.midiOn} />
+              </div>
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Fade max: {s.midiFadeMax.toFixed(2)}s</div>
+                <input type="range" min="0.1" max="8" step="0.01" value={s.midiFadeMax} onChange={(e) => setS((p) => ({ ...p, midiFadeMax: parseFloat(e.target.value) }))} className="w-full" disabled={!s.midiOn} />
+              </div>
+
+              <button
+                onClick={() => setS((p) => ({ ...p, midiQuantizeToScale: !p.midiQuantizeToScale }))}
+                className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
+                  s.midiQuantizeToScale
+                    ? isDark
+                      ? "bg-white text-black border-white"
+                      : "bg-black text-white border-black"
+                    : inputBg
+                }`}
+                disabled={!s.midiOn}
+              >
+                Quantize Thru to scale
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* FX (kept) */}
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wider">FX</label>
 
