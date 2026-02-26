@@ -323,7 +323,10 @@ function triggerPerc(ac, dest, opts) {
 
   noiseGain.gain.setValueAtTime(0.0, now);
   noiseGain.gain.linearRampToValueAtTime(noiseAmt * v * (1 - tone), now + 0.002);
-  noiseGain.gain.exponentialRampToValueAtTime(0.00001, now + clamp(decay, 0.03, 1.8) * (type === "shaker" ? 1.2 : 1.0));
+  noiseGain.gain.exponentialRampToValueAtTime(
+    0.00001,
+    now + clamp(decay, 0.03, 1.8) * (type === "shaker" ? 1.2 : 1.0)
+  );
 
   noise.connect(noiseBP);
   noiseBP.connect(noiseHP);
@@ -341,12 +344,17 @@ function triggerPerc(ac, dest, opts) {
       ? lerp(1.2, 2.0, punch)
       : type === "wood" || type === "rim"
       ? lerp(1.05, 1.35, punch)
-      : acoustic ? lerp(1.01, 1.05, punch) : 1.02;
+      : acoustic
+      ? lerp(1.01, 1.05, punch)
+      : 1.02;
 
   // small “human” drift for acoustic feel
   const drift = acoustic ? (Math.random() * 2 - 1) * 0.006 : 0;
   body.frequency.setValueAtTime(f0 * drop * (1 + drift), now);
-  body.frequency.exponentialRampToValueAtTime(f0 * (1 + drift * 0.25), now + (type === "kick" ? 0.04 : type === "wood" ? 0.015 : 0.03));
+  body.frequency.exponentialRampToValueAtTime(
+    f0 * (1 + drift * 0.25),
+    now + (type === "kick" ? 0.04 : type === "wood" ? 0.015 : 0.03)
+  );
 
   const bodyGain = ac.createGain();
   const bodyAmt =
@@ -373,7 +381,12 @@ function triggerPerc(ac, dest, opts) {
   const woodRes = ac.createBiquadFilter();
   woodRes.type = "bandpass";
   woodRes.Q.value = type === "wood" || type === "rim" ? 18 : acoustic ? 10 : 1;
-  woodRes.frequency.setValueAtTime(type === "wood" || type === "rim" ? clamp(f0 * lerp(1.6, 2.8, bright), 350, 6500) : clamp(f0 * 2.2, 220, 7000), now);
+  woodRes.frequency.setValueAtTime(
+    type === "wood" || type === "rim"
+      ? clamp(f0 * lerp(1.6, 2.8, bright), 350, 6500)
+      : clamp(f0 * 2.2, 220, 7000),
+    now
+  );
 
   // sum
   clickGain.connect(out);
@@ -504,7 +517,7 @@ export default function App() {
     cutoffBase: 400,
     cutoffSpan: 7200,
 
-    // ADSR controls (you asked for shaping controls)
+    // ADSR controls
     atkBase: 0.008,
     atkSpan: 0.09,
     decBase: 0.08,
@@ -540,8 +553,8 @@ export default function App() {
     percBaseMidi: 24,
     percOctaveSpan: 3,
     percTone: 0.45,
-    percDecayBase: 0.10,
-    percDecaySpan: 0.50,
+    percDecayBase: 0.1,
+    percDecaySpan: 0.5,
     percPunch: 0.7,
     percBright: 0.55,
     percDrive: 0.08,
@@ -627,7 +640,7 @@ export default function App() {
   }
 
   /* =======================
-     Char-grid effective dims + edges (NEW variable density)
+     Char-grid effective dims + edges
 ======================= */
   const computeCharEffDims = React.useCallback((st) => {
     const { w, h } = canvasPxRef.current || { w: 800, h: 600 };
@@ -753,7 +766,7 @@ export default function App() {
   }, []);
 
   /* =======================
-     AUDIO GRAPH (stable)
+     AUDIO GRAPH (lazy init)
 ======================= */
   const audioRef = React.useRef({
     ac: null,
@@ -836,12 +849,10 @@ export default function App() {
 
       A.voices = [];
       A.voicePtr = 0;
-      A.running = false;
-      A.step = 0;
-      A.timer = null;
       A._revTime = null;
 
       updateAudioParamsRealtime();
+      ensureVoices();
     }
     return A;
   }
@@ -897,7 +908,8 @@ export default function App() {
   }
 
   function ensureVoices() {
-    const A = ensureAudio();
+    const A = audioRef.current;
+    if (!A.ac) return;
     const ac = A.ac;
     const want = clamp(sRef.current.voices ?? 12, 1, 32);
     if (A.voices.length !== want) {
@@ -954,7 +966,6 @@ export default function App() {
     charEffCols: computeCharEffDims(s).cols,
     charEffRows: computeCharEffDims(s).rows,
 
-    // include density params so density shifts glide too
     varColsOn: s.varColsOn,
     colFocus: s.colFocus,
     colStrength: s.colStrength,
@@ -1056,7 +1067,8 @@ export default function App() {
     const st = sRef.current;
     if (!st.auditionOnPaint) return;
 
-    const A = ensureAudio();
+    // Only try playing if audio exists & is running (or user just enabled it)
+    const A = audioRef.current.ac ? audioRef.current : ensureAudio();
     if (!A.ac || A.ac.state === "suspended") return;
 
     ensureVoices();
@@ -1110,12 +1122,11 @@ export default function App() {
             : h < 0.66
             ? "rim"
             : "shaker"
-          : // soft
-            h < 0.33
-            ? "tom"
-            : h < 0.66
-            ? "snare"
-            : "shaker";
+          : h < 0.33
+          ? "tom"
+          : h < 0.66
+          ? "snare"
+          : "shaker";
 
       const percDegreesCount = 7 * clamp(st.percOctaveSpan ?? 3, 1, 7);
       const percScaleMidi = buildScaleMidi({
@@ -1133,7 +1144,9 @@ export default function App() {
         type,
         freq,
         vel,
-        decay: clamp((st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * (1 - rowNorm), 0.03, 1.2) * (acoustic ? 1.15 : 1),
+        decay:
+          clamp((st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * (1 - rowNorm), 0.03, 1.2) *
+          (acoustic ? 1.15 : 1),
         tone: clamp(st.percTone ?? 0.45, 0, 1),
         bright: clamp(st.percBright ?? 0.55, 0, 1),
         punch: clamp(st.percPunch ?? 0.7, 0, 1) * (acoustic ? 0.92 : 1),
@@ -1163,7 +1176,6 @@ export default function App() {
     }
 
     upsertCellLayer(layerKey, idx, { paint: { mode: "color", color: chosenColor } });
-
     auditionPaint(layerKey === "perc" ? "perc" : "melody", r, c, rows, cols, chosenColor);
   };
 
@@ -1179,24 +1191,15 @@ export default function App() {
 
   /* =======================
      Scheduler (melody + perc)
+     (runs always, but plays only if audio exists & resumed)
 ======================= */
   function startScheduler() {
-    const A = ensureAudio();
-    const ac = A.ac;
-    if (ac.state === "suspended") ac.resume?.();
-    A.running = true;
+    audioRef.current.running = true;
 
     const tick = () => {
       if (!audioRef.current.running) return;
 
       const st = sRef.current;
-      ensureVoices();
-      updateAudioParamsRealtime();
-
-      if (!st.soundOn && !st.percOn) {
-        audioRef.current.timer = setTimeout(tick, 50);
-        return;
-      }
 
       const melNow = cellsMelRef.current;
       const percNow = cellsPercRef.current;
@@ -1227,9 +1230,9 @@ export default function App() {
       }
 
       const col = audioRef.current.step % cols;
+      const nowS = performance.now() * 0.001;
 
       // morph amount
-      const nowS = performance.now() * 0.001;
       let morph = 1;
       if (morphRef.current.active && morphRef.current.prev) {
         const t = (nowS - morphRef.current.t0) / Math.max(0.0001, morphRef.current.dur);
@@ -1244,8 +1247,8 @@ export default function App() {
         const yNorm = rows <= 1 ? 0.5 : (rNow + 0.5) / rows;
         const oldRows =
           prevSnap.pat === "swiss-grid"
-            ? Math.max(1, (prevSnap.rows | 0))
-            : Math.max(1, (prevSnap.charEffRows | 0));
+            ? Math.max(1, prevSnap.rows | 0)
+            : Math.max(1, prevSnap.charEffRows | 0);
         return clamp(Math.floor(yNorm * oldRows), 0, oldRows - 1);
       };
       const getOldColIndex = (cNow) => {
@@ -1253,8 +1256,8 @@ export default function App() {
         const xNorm = cols <= 1 ? 0.5 : (cNow + 0.5) / cols;
         const oldCols =
           prevSnap.pat === "swiss-grid"
-            ? Math.max(1, (prevSnap.cols | 0))
-            : Math.max(1, (prevSnap.charEffCols | 0));
+            ? Math.max(1, prevSnap.cols | 0)
+            : Math.max(1, prevSnap.charEffCols | 0);
         return clamp(Math.floor(xNorm * oldCols), 0, oldCols - 1);
       };
       const blendFreq = (fOld, fNew) => {
@@ -1296,14 +1299,19 @@ export default function App() {
         degreesCount: percDegreesCount,
       });
 
-      const re =
-        isSwiss
-          ? rowEdgesRef.current || Array.from({ length: rows + 1 }, (_, i) => i / rows)
-          : null;
+      const re = isSwiss ? rowEdgesRef.current || Array.from({ length: rows + 1 }, (_, i) => i / rows) : null;
       const avgRowH = isSwiss ? 1 / rows : 1;
 
+      // Only play if audio exists and is resumed
+      const A = audioRef.current;
+      const canPlay = !!A.ac && A.ac.state === "running";
+      if (canPlay) {
+        ensureVoices();
+        updateAudioParamsRealtime();
+      }
+
       // ===== MELODY
-      if (st.soundOn) {
+      if (st.soundOn && canPlay) {
         const hits = [];
         const maxNotes = clamp(st.maxNotesPerStep ?? 10, 1, 32);
 
@@ -1326,8 +1334,8 @@ export default function App() {
           const oldRows =
             prevSnap
               ? prevSnap.pat === "swiss-grid"
-                ? Math.max(1, (prevSnap.rows | 0))
-                : Math.max(1, (prevSnap.charEffRows | 0))
+                ? Math.max(1, prevSnap.rows | 0)
+                : Math.max(1, prevSnap.charEffRows | 0)
               : rows;
 
           const rowNormOld = oldRows <= 1 ? 0.5 : 1 - oldR / (oldRows - 1);
@@ -1386,11 +1394,11 @@ export default function App() {
         hits.sort((a, b) => b.score - a.score);
         const chosen = hits.slice(0, Math.min(maxNotes, hits.length));
 
-        const pool = audioRef.current.voices;
+        const pool = A.voices;
         for (const h of chosen) {
-          const v = pool[audioRef.current.voicePtr % pool.length];
-          audioRef.current.voicePtr++;
-          triggerVoice(ac, v, {
+          const v = pool[A.voicePtr % pool.length];
+          A.voicePtr++;
+          triggerVoice(A.ac, v, {
             freq: h.freq,
             vel: h.vel,
             cutoffHz: h.cutoff,
@@ -1403,7 +1411,7 @@ export default function App() {
       }
 
       // ===== PERCUSSION
-      if (st.percOn) {
+      if (st.percOn && canPlay) {
         const hits = [];
         const maxHits = clamp(st.percMaxHitsPerStep ?? 8, 1, 32);
 
@@ -1436,12 +1444,11 @@ export default function App() {
                 : h < 0.66
                 ? "rim"
                 : "shaker"
-              : // soft
-                h < 0.33
-                ? "tom"
-                : h < 0.66
-                ? "snare"
-                : "shaker";
+              : h < 0.33
+              ? "tom"
+              : h < 0.66
+              ? "snare"
+              : "shaker";
 
           const rowNormNow = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
 
@@ -1449,8 +1456,8 @@ export default function App() {
           const oldRows =
             prevSnap
               ? prevSnap.pat === "swiss-grid"
-                ? Math.max(1, (prevSnap.rows | 0))
-                : Math.max(1, (prevSnap.charEffRows | 0))
+                ? Math.max(1, prevSnap.rows | 0)
+                : Math.max(1, prevSnap.charEffRows | 0)
               : rows;
           const rowNormOld = oldRows <= 1 ? 0.5 : 1 - oldR / (oldRows - 1);
 
@@ -1473,7 +1480,9 @@ export default function App() {
 
           const vel = clamp(0.12 + 0.88 * lum, 0.05, 1);
 
-          let decay = (st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * clamp((1 - rowNormNow) * 0.7 + lum * 0.5, 0, 1);
+          let decay =
+            (st.percDecayBase ?? 0.1) +
+            (st.percDecaySpan ?? 0.5) * clamp((1 - rowNormNow) * 0.7 + lum * 0.5, 0, 1);
 
           if (isSwiss && st.varRowsOn && re) {
             const rh = (re[r + 1] ?? (r + 1) / rows) - (re[r] ?? r / rows);
@@ -1501,7 +1510,7 @@ export default function App() {
         const chosen = hits.slice(0, Math.min(maxHits, hits.length));
 
         for (const h of chosen) {
-          triggerPerc(ac, audioRef.current.percBus, {
+          triggerPerc(A.ac, A.percBus, {
             type: h.type,
             freq: h.freq,
             vel: h.vel,
@@ -1519,6 +1528,7 @@ export default function App() {
       audioRef.current.timer = setTimeout(tick, Math.max(10, stepSec * 1000));
     };
 
+    const A = audioRef.current;
     if (A.timer) clearTimeout(A.timer);
     A.timer = setTimeout(tick, 0);
   }
@@ -1607,7 +1617,8 @@ export default function App() {
 
       const color = midiToColor(note, entry.vel01, dur);
       const fade = clamp(
-        (st.midiFadeMin ?? 0.25) + (st.midiFadeMax ?? 2.5 - (st.midiFadeMin ?? 0.25)) * clamp(dur / 2.0, 0, 1),
+        (st.midiFadeMin ?? 0.25) +
+          (st.midiFadeMax ?? 2.5 - (st.midiFadeMin ?? 0.25)) * clamp(dur / 2.0, 0, 1),
         0.05,
         8
       );
@@ -1628,10 +1639,9 @@ export default function App() {
     const st = sRef.current;
     if (!st.midiOn || !st.midiThru) return;
 
-    const A = ensureAudio();
+    const A = audioRef.current.ac ? audioRef.current : ensureAudio();
     const ac = A.ac;
-    if (!A.ac) return;
-    if (ac.state === "suspended") return;
+    if (!ac || ac.state !== "running") return;
 
     ensureVoices();
     updateAudioParamsRealtime();
@@ -1769,7 +1779,6 @@ export default function App() {
       const t = performance.now() * 0.001;
       applyPaintToIdx(idx, row, col, t, rows, cols);
     } else {
-      // char-grid using edges
       const CE = charEdgesRef.current;
       const cols = CE?.cols ?? 16;
       const rows = CE?.rows ?? 12;
@@ -1813,7 +1822,8 @@ export default function App() {
   /* =======================
      Render loop
 ======================= */
-  const getFontFamily = () => `"Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+  const getFontFamily = () =>
+    `system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"`;
 
   const render = (tm) => {
     const cv = canvasRef.current;
@@ -1939,7 +1949,11 @@ export default function App() {
             }
 
             const gi = chs.length ? Math.floor((t * spd + r * 0.07 + c * 0.05) * 3) % chs.length : 0;
-            const sz = Math.max(8, Math.min(g.w, g.h) * 0.58);
+
+            // FIX: use s.charSz (but still clamp to cell)
+            const maxCell = Math.max(8, Math.min(g.w, g.h) * 0.9);
+            const sz = clamp(s.charSz ?? 22, 6, maxCell);
+
             ctx.save();
             ctx.globalAlpha = alphaMul * (col ? 1 : 0.95);
             ctx.font = `${Math.floor(sz)}px ${getFontFamily()}`;
@@ -2045,15 +2059,6 @@ export default function App() {
     };
   }, []);
 
-  // load Inter font
-  React.useEffect(() => {
-    const link = document.createElement("link");
-    link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap";
-    link.rel = "stylesheet";
-    document.head.appendChild(link);
-    return () => document.head.removeChild(link);
-  }, []);
-
   /* =======================
      UI helpers
 ======================= */
@@ -2133,9 +2138,11 @@ export default function App() {
           </button>
           <button
             onClick={() => {
+              const cv = canvasRef.current;
+              if (!cv) return;
               const l = document.createElement("a");
               l.download = "pattern.png";
-              l.href = canvasRef.current.toDataURL();
+              l.href = cv.toDataURL("image/png");
               l.click();
             }}
             className={`flex-1 flex justify-center px-4 py-2.5 rounded-lg font-medium min-h-[44px] ${buttonPrimary}`}
@@ -2147,7 +2154,10 @@ export default function App() {
 
         {/* theme + audio */}
         <div className="flex gap-2">
-          <button onClick={unlockAudio} className={`flex-1 px-4 py-2.5 rounded-lg font-medium min-h-[44px] ${buttonDark}`}>
+          <button
+            onClick={unlockAudio}
+            className={`flex-1 px-4 py-2.5 rounded-lg font-medium min-h-[44px] ${buttonDark}`}
+          >
             Enable Audio
           </button>
 
@@ -2222,7 +2232,11 @@ export default function App() {
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
               <div className={`text-xs ${subtleText}`}>View</div>
-              <select value={layerView} onChange={(e) => setLayerView(e.target.value)} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
+              <select
+                value={layerView}
+                onChange={(e) => setLayerView(e.target.value)}
+                className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+              >
                 <option value="both">Both</option>
                 <option value="active">Active only</option>
                 <option value="ghost">Ghost other</option>
@@ -2230,7 +2244,16 @@ export default function App() {
             </div>
             <div className="space-y-1">
               <div className={`text-xs ${subtleText}`}>Ghost</div>
-              <input type="range" min="0" max="0.8" step="0.01" value={ghostOpacity} onChange={(e) => setGhostOpacity(parseFloat(e.target.value))} className="w-full" disabled={layerView !== "ghost"} />
+              <input
+                type="range"
+                min="0"
+                max="0.8"
+                step="0.01"
+                value={ghostOpacity}
+                onChange={(e) => setGhostOpacity(parseFloat(e.target.value))}
+                className="w-full"
+                disabled={layerView !== "ghost"}
+              />
             </div>
           </div>
 
@@ -2327,8 +2350,22 @@ export default function App() {
             <label className="block text-xs font-semibold uppercase tracking-wider">
               Grid {s.cols} × {s.rows}
             </label>
-            <input type="range" min="4" max="40" value={s.cols} onChange={(e) => setS((p) => ({ ...p, cols: parseInt(e.target.value, 10) }))} className="w-full" />
-            <input type="range" min="4" max="40" value={s.rows} onChange={(e) => setS((p) => ({ ...p, rows: parseInt(e.target.value, 10) }))} className="w-full" />
+            <input
+              type="range"
+              min="4"
+              max="40"
+              value={s.cols}
+              onChange={(e) => setS((p) => ({ ...p, cols: parseInt(e.target.value, 10) }))}
+              className="w-full"
+            />
+            <input
+              type="range"
+              min="4"
+              max="40"
+              value={s.rows}
+              onChange={(e) => setS((p) => ({ ...p, rows: parseInt(e.target.value, 10) }))}
+              className="w-full"
+            />
 
             <label className="block text-xs font-semibold uppercase tracking-wider">Variable Grid Density</label>
 
@@ -2345,11 +2382,35 @@ export default function App() {
               {s.varColsOn && (
                 <>
                   <label className="block text-xs font-semibold uppercase tracking-wider">Focus X: {s.colFocus.toFixed(2)}</label>
-                  <input type="range" min="0" max="1" step="0.01" value={s.colFocus} onChange={(e) => setS((p) => ({ ...p, colFocus: parseFloat(e.target.value) }))} className="w-full" />
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={s.colFocus}
+                    onChange={(e) => setS((p) => ({ ...p, colFocus: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
                   <label className="block text-xs font-semibold uppercase tracking-wider">Strength: {s.colStrength.toFixed(1)}</label>
-                  <input type="range" min="0" max="20" step="0.1" value={s.colStrength} onChange={(e) => setS((p) => ({ ...p, colStrength: parseFloat(e.target.value) }))} className="w-full" />
+                  <input
+                    type="range"
+                    min="0"
+                    max="20"
+                    step="0.1"
+                    value={s.colStrength}
+                    onChange={(e) => setS((p) => ({ ...p, colStrength: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
                   <label className="block text-xs font-semibold uppercase tracking-wider">Band Width: {s.colSigma.toFixed(2)}</label>
-                  <input type="range" min="0.05" max="0.5" step="0.01" value={s.colSigma} onChange={(e) => setS((p) => ({ ...p, colSigma: parseFloat(e.target.value) }))} className="w-full" />
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.5"
+                    step="0.01"
+                    value={s.colSigma}
+                    onChange={(e) => setS((p) => ({ ...p, colSigma: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
                 </>
               )}
             </div>
@@ -2367,11 +2428,35 @@ export default function App() {
               {s.varRowsOn && (
                 <>
                   <label className="block text-xs font-semibold uppercase tracking-wider">Focus Y: {s.rowFocus.toFixed(2)}</label>
-                  <input type="range" min="0" max="1" step="0.01" value={s.rowFocus} onChange={(e) => setS((p) => ({ ...p, rowFocus: parseFloat(e.target.value) }))} className="w-full" />
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={s.rowFocus}
+                    onChange={(e) => setS((p) => ({ ...p, rowFocus: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
                   <label className="block text-xs font-semibold uppercase tracking-wider">Strength: {s.rowStrength.toFixed(1)}</label>
-                  <input type="range" min="0" max="20" step="0.1" value={s.rowStrength} onChange={(e) => setS((p) => ({ ...p, rowStrength: parseFloat(e.target.value) }))} className="w-full" />
+                  <input
+                    type="range"
+                    min="0"
+                    max="20"
+                    step="0.1"
+                    value={s.rowStrength}
+                    onChange={(e) => setS((p) => ({ ...p, rowStrength: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
                   <label className="block text-xs font-semibold uppercase tracking-wider">Band Width: {s.rowSigma.toFixed(2)}</label>
-                  <input type="range" min="0.05" max="0.5" step="0.01" value={s.rowSigma} onChange={(e) => setS((p) => ({ ...p, rowSigma: parseFloat(e.target.value) }))} className="w-full" />
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.5"
+                    step="0.01"
+                    value={s.rowSigma}
+                    onChange={(e) => setS((p) => ({ ...p, rowSigma: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
                 </>
               )}
             </div>
@@ -2381,7 +2466,14 @@ export default function App() {
         {s.pat === "char-grid" && (
           <div className="space-y-2">
             <label className="block text-xs font-semibold uppercase tracking-wider">Spacing (base): {s.space}px</label>
-            <input type="range" min="12" max="120" value={s.space} onChange={(e) => setS((p) => ({ ...p, space: parseInt(e.target.value, 10) }))} className="w-full" />
+            <input
+              type="range"
+              min="12"
+              max="120"
+              value={s.space}
+              onChange={(e) => setS((p) => ({ ...p, space: parseInt(e.target.value, 10) }))}
+              className="w-full"
+            />
 
             <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
               <div className="flex items-center justify-between">
@@ -2422,7 +2514,6 @@ export default function App() {
               />
             </div>
 
-            {/* NEW: variable density for char-grid */}
             <label className="block text-xs font-semibold uppercase tracking-wider">Variable Grid Density (Char Grid)</label>
 
             <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
@@ -2489,7 +2580,12 @@ export default function App() {
             </button>
 
             <label className="block text-xs font-semibold uppercase tracking-wider">Characters</label>
-            <input type="text" value={s.chars} onChange={(e) => setS((p) => ({ ...p, chars: e.target.value }))} className={`w-full px-3 py-2 border rounded-lg font-mono ${inputBg}`} />
+            <input
+              type="text"
+              value={s.chars}
+              onChange={(e) => setS((p) => ({ ...p, chars: e.target.value }))}
+              className={`w-full px-3 py-2 border rounded-lg font-mono ${inputBg}`}
+            />
           </div>
         )}
 
@@ -2505,6 +2601,9 @@ export default function App() {
             <input type="range" min="0" max="1.5" step="0.01" value={s.percVol} onChange={(e) => setS((p) => ({ ...p, percVol: parseFloat(e.target.value) }))} className="w-full" />
           </div>
         </div>
+
+        {/* Melody + Perc + MIDI + FX sections */}
+        {/* NOTE: unchanged from your paste (to keep behavior), except audio is now lazy-init. */}
 
         {/* Melody */}
         <div className="space-y-2">
@@ -2557,7 +2656,6 @@ export default function App() {
             </select>
           </div>
 
-          {/* NEW: chord mode */}
           <div className="space-y-1">
             <div className={`text-xs ${subtleText}`}>Chord mode</div>
             <select value={s.chordType} onChange={(e) => setS((p) => ({ ...p, chordType: e.target.value }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
@@ -2566,7 +2664,6 @@ export default function App() {
             </select>
           </div>
 
-          {/* NEW: progression controls */}
           <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
             <div className="flex items-center justify-between">
               <div className="text-xs font-semibold uppercase tracking-wider">Progression</div>
@@ -2575,11 +2672,7 @@ export default function App() {
               </button>
             </div>
 
-            <select
-              onChange={(e) => setProgressionPreset(e.target.value)}
-              className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
-              defaultValue=""
-            >
+            <select onChange={(e) => setProgressionPreset(e.target.value)} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`} defaultValue="">
               <option value="" disabled>
                 Pick a preset…
               </option>
@@ -2592,30 +2685,16 @@ export default function App() {
 
             <div className="space-y-1">
               <div className={`text-xs ${subtleText}`}>Degrees (comma-separated)</div>
-              <input
-                type="text"
-                value={progStr}
-                onChange={(e) => setProgFromString(e.target.value)}
-                className={`w-full px-2 py-2 border rounded-lg text-xs font-mono ${inputBg}`}
-                placeholder="0,5,3,6"
-              />
+              <input type="text" value={progStr} onChange={(e) => setProgFromString(e.target.value)} className={`w-full px-2 py-2 border rounded-lg text-xs font-mono ${inputBg}`} placeholder="0,5,3,6" />
               <div className={`text-[11px] ${subtleText}`}>Scale degrees (0–6). Values outside wrap.</div>
             </div>
 
             <div className="space-y-1">
               <div className={`text-xs ${subtleText}`}>Rate (columns per chord): {s.progRate}</div>
-              <input
-                type="range"
-                min="1"
-                max="16"
-                value={s.progRate}
-                onChange={(e) => setS((p) => ({ ...p, progRate: parseInt(e.target.value, 10) }))}
-                className="w-full"
-              />
+              <input type="range" min="1" max="16" value={s.progRate} onChange={(e) => setS((p) => ({ ...p, progRate: parseInt(e.target.value, 10) }))} className="w-full" />
             </div>
           </div>
 
-          {/* NEW: Melody shaping (ADSR + filter) */}
           <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
             <div className="text-xs font-semibold uppercase tracking-wider">Melody shaping</div>
 
@@ -2676,11 +2755,7 @@ export default function App() {
 
           <div className="space-y-1">
             <div className={`text-xs ${subtleText}`}>Kit</div>
-            <select
-              value={s.percKit}
-              onChange={(e) => setS((p) => ({ ...p, percKit: e.target.value }))}
-              className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
-            >
+            <select value={s.percKit} onChange={(e) => setS((p) => ({ ...p, percKit: e.target.value }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
               <option value="classic">Classic (kick/snare/hat)</option>
               <option value="acoustic">Acoustic (softer/woodier)</option>
               <option value="wood">Wood (wood/rim/shaker)</option>
@@ -2691,12 +2766,10 @@ export default function App() {
           <label className="block text-xs font-semibold uppercase tracking-wider">Max hits / step: {s.percMaxHitsPerStep}</label>
           <input type="range" min="1" max="24" value={s.percMaxHitsPerStep} onChange={(e) => setS((p) => ({ ...p, percMaxHitsPerStep: parseInt(e.target.value, 10) }))} className="w-full" />
 
-          <div className={`text-[11px] ${subtleText}`}>
-            Hue chooses drum type inside the kit. Acoustic kit uses softer drive + more resonance.
-          </div>
+          <div className={`text-[11px] ${subtleText}`}>Hue chooses drum type inside the kit. Acoustic kit uses softer drive + more resonance.</div>
         </div>
 
-        {/* MIDI (NEW UI so you can actually see it's there) */}
+        {/* MIDI */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold uppercase tracking-wider">MIDI</label>
@@ -2709,20 +2782,13 @@ export default function App() {
             </button>
           </div>
 
-          <div className={`text-[11px] ${subtleText}`}>
-            {midiSupported ? "Web MIDI supported ✅" : "Web MIDI not supported in this browser ❌"}
-          </div>
+          <div className={`text-[11px] ${subtleText}`}>{midiSupported ? "Web MIDI supported ✅" : "Web MIDI not supported in this browser ❌"}</div>
 
           {midiSupported && (
             <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
               <div className="space-y-1">
                 <div className={`text-xs ${subtleText}`}>Input</div>
-                <select
-                  value={midiInputId}
-                  onChange={(e) => setMidiInputId(e.target.value)}
-                  className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
-                  disabled={!s.midiOn}
-                >
+                <select value={midiInputId} onChange={(e) => setMidiInputId(e.target.value)} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`} disabled={!s.midiOn}>
                   {midiInputs.length === 0 && <option value="">No inputs</option>}
                   {midiInputs.map((i) => (
                     <option key={i.id} value={i.id}>
@@ -2736,11 +2802,7 @@ export default function App() {
                 <button
                   onClick={() => setS((p) => ({ ...p, midiDraw: !p.midiDraw }))}
                   className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
-                    s.midiDraw
-                      ? isDark
-                        ? "bg-white text-black border-white"
-                        : "bg-black text-white border-black"
-                      : inputBg
+                    s.midiDraw ? (isDark ? "bg-white text-black border-white" : "bg-black text-white border-black") : inputBg
                   }`}
                   disabled={!s.midiOn}
                 >
@@ -2749,11 +2811,7 @@ export default function App() {
                 <button
                   onClick={() => setS((p) => ({ ...p, midiThru: !p.midiThru }))}
                   className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
-                    s.midiThru
-                      ? isDark
-                        ? "bg-white text-black border-white"
-                        : "bg-black text-white border-black"
-                      : inputBg
+                    s.midiThru ? (isDark ? "bg-white text-black border-white" : "bg-black text-white border-black") : inputBg
                   }`}
                   disabled={!s.midiOn}
                 >
@@ -2813,11 +2871,7 @@ export default function App() {
               <button
                 onClick={() => setS((p) => ({ ...p, midiQuantizeToScale: !p.midiQuantizeToScale }))}
                 className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
-                  s.midiQuantizeToScale
-                    ? isDark
-                      ? "bg-white text-black border-white"
-                      : "bg-black text-white border-black"
-                    : inputBg
+                  s.midiQuantizeToScale ? (isDark ? "bg-white text-black border-white" : "bg-black text-white border-black") : inputBg
                 }`}
                 disabled={!s.midiOn}
               >
@@ -2827,7 +2881,7 @@ export default function App() {
           )}
         </div>
 
-        {/* FX (kept) */}
+        {/* FX */}
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wider">FX</label>
 
