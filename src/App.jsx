@@ -229,19 +229,11 @@ function makeNoiseBuffer(ac, durSec) {
   return buf;
 }
 
-/**
- * UPDATED: percussion now supports explicit Attack/Decay/Level (like melody shaping).
- * - attack: overall hit attack (seconds)
- * - level: overall hit level multiplier (0..2-ish)
- * - decay: (already existed) still used per-component, plus as an overall “tail” envelope
- */
 function triggerPerc(ac, dest, opts) {
   const {
     type = "kick", // kick | snare | hat | tom | wood | shaker | rim
     freq = 110,
     vel = 0.7,
-    attack = 0.002, // NEW
-    level = 1.0, // NEW
     decay = 0.18,
     tone = 0.55,
     bright = 0.5,
@@ -252,18 +244,9 @@ function triggerPerc(ac, dest, opts) {
 
   const now = ac.currentTime;
   const v = clamp(vel, 0, 1);
-  const lvl = clamp(level ?? 1.0, 0, 2.5);
-  const atk = clamp(attack ?? 0.002, 0.0005, 0.08);
 
-  // overall envelope time uses decay too (acts like “macro decay”)
-  const envDecay = clamp(decay ?? 0.18, 0.03, 1.8) * (type === "shaker" ? 1.2 : 1.0);
-
-  // macro output gain (this is the main “attack/decay/level” shaper)
   const out = ac.createGain();
-  out.gain.cancelScheduledValues(now);
-  out.gain.setValueAtTime(0.00001, now);
-  out.gain.linearRampToValueAtTime(lvl, now + atk);
-  out.gain.exponentialRampToValueAtTime(0.00001, now + atk + envDecay);
+  out.gain.setValueAtTime(1.0, now);
 
   const shaper = ac.createWaveShaper();
   shaper.oversample = "2x";
@@ -570,15 +553,8 @@ export default function App() {
     percBaseMidi: 24,
     percOctaveSpan: 3,
     percTone: 0.45,
-
-    // UPDATED: “shaping” like melody
-    percLevelBase: 1.0,      // NEW
-    percLevelSpan: 0.75,     // NEW
-    percAtkBase: 0.0015,     // NEW
-    percAtkSpan: 0.018,      // NEW
-    percDecBase: 0.10,       // NEW (replaces old percDecayBase conceptually)
-    percDecSpan: 0.50,       // NEW
-
+    percDecayBase: 0.1,
+    percDecaySpan: 0.5,
     percPunch: 0.7,
     percBright: 0.55,
     percDrive: 0.08,
@@ -1164,19 +1140,13 @@ export default function App() {
       const freq = midiToFreq(pm);
 
       const acoustic = kit === "acoustic";
-
-      // NEW: use shaping controls for audition too
-      const level = clamp((st.percLevelBase ?? 1.0) + (st.percLevelSpan ?? 0.75) * lum, 0, 2.5);
-      const atk = clamp((st.percAtkBase ?? 0.0015) + (st.percAtkSpan ?? 0.018) * (1 - rowNorm), 0.0005, 0.08);
-      const dec = clamp((st.percDecBase ?? 0.10) + (st.percDecSpan ?? 0.50) * (1 - rowNorm), 0.03, 1.7);
-
       triggerPerc(A.ac, A.percBus, {
         type,
         freq,
         vel,
-        level,
-        attack: atk,
-        decay: dec * (acoustic ? 1.15 : 1),
+        decay:
+          clamp((st.percDecayBase ?? 0.1) + (st.percDecaySpan ?? 0.5) * (1 - rowNorm), 0.03, 1.2) *
+          (acoustic ? 1.15 : 1),
         tone: clamp(st.percTone ?? 0.45, 0, 1),
         bright: clamp(st.percBright ?? 0.55, 0, 1),
         punch: clamp(st.percPunch ?? 0.7, 0, 1) * (acoustic ? 0.92 : 1),
@@ -1221,6 +1191,7 @@ export default function App() {
 
   /* =======================
      Scheduler (melody + perc)
+     (runs always, but plays only if audio exists & resumed)
 ======================= */
   function startScheduler() {
     audioRef.current.running = true;
@@ -1439,7 +1410,7 @@ export default function App() {
         }
       }
 
-      // ===== PERCUSSION (UPDATED: attack/decay/level shaping)
+      // ===== PERCUSSION
       if (st.percOn && canPlay) {
         const hits = [];
         const maxHits = clamp(st.percMaxHitsPerStep ?? 8, 1, 32);
@@ -1509,31 +1480,22 @@ export default function App() {
 
           const vel = clamp(0.12 + 0.88 * lum, 0.05, 1);
 
-          // NEW: perc envelope params (like melody shaping)
-          let level = (st.percLevelBase ?? 1.0) + (st.percLevelSpan ?? 0.75) * clamp(lum, 0, 1);
-          let attack = (st.percAtkBase ?? 0.0015) + (st.percAtkSpan ?? 0.018) * clamp(1 - rowNormNow, 0, 1);
           let decay =
-            (st.percDecBase ?? 0.10) +
-            (st.percDecSpan ?? 0.50) * clamp((1 - rowNormNow) * 0.7 + lum * 0.5, 0, 1);
+            (st.percDecayBase ?? 0.1) +
+            (st.percDecaySpan ?? 0.5) * clamp((1 - rowNormNow) * 0.7 + lum * 0.5, 0, 1);
 
           if (isSwiss && st.varRowsOn && re) {
             const rh = (re[r + 1] ?? (r + 1) / rows) - (re[r] ?? r / rows);
             const ratio = clamp(rh / avgRowH, 0.35, 2.4);
             decay *= clamp(ratio, 0.65, 1.7);
-            // a tiny compensation: denser rows feel more “snappy”
-            attack *= clamp(1.2 - (ratio - 1) * 0.25, 0.6, 1.4);
           }
 
-          attack = clamp(attack, 0.0005, 0.08);
           decay = clamp(decay, 0.03, 1.7) * (acoustic ? 1.15 : 1);
-          level = clamp(level, 0, 2.5);
 
           hits.push({
             type,
             freq,
             vel,
-            level,
-            attack,
             decay,
             tone: clamp(st.percTone ?? 0.45, 0, 1),
             punch: clamp(st.percPunch ?? 0.7, 0, 1) * (acoustic ? 0.92 : 1),
@@ -1552,10 +1514,8 @@ export default function App() {
             type: h.type,
             freq: h.freq,
             vel: h.vel,
-            level: h.level,
-            attack: h.attack,
-            decay: h.decay,
             tone: h.tone,
+            decay: h.decay,
             punch: h.punch,
             bright: h.bright,
             driveAmt: h.driveAmt,
@@ -2554,7 +2514,51 @@ export default function App() {
               />
             </div>
 
-            {/* ... your existing char-grid density + char settings remain unchanged ... */}
+            <label className="block text-xs font-semibold uppercase tracking-wider">Variable Grid Density (Char Grid)</label>
+
+            <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wider">Columns warp</div>
+                <button
+                  onClick={() => setS((p) => ({ ...p, charVarColsOn: !p.charVarColsOn }))}
+                  className={`p-1.5 rounded ${s.charVarColsOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+                >
+                  {s.charVarColsOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+                </button>
+              </div>
+              {s.charVarColsOn && (
+                <>
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Focus X: {s.charColFocus.toFixed(2)}</label>
+                  <input type="range" min="0" max="1" step="0.01" value={s.charColFocus} onChange={(e) => setS((p) => ({ ...p, charColFocus: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Strength: {s.charColStrength.toFixed(1)}</label>
+                  <input type="range" min="0" max="20" step="0.1" value={s.charColStrength} onChange={(e) => setS((p) => ({ ...p, charColStrength: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Band Width: {s.charColSigma.toFixed(2)}</label>
+                  <input type="range" min="0.05" max="0.5" step="0.01" value={s.charColSigma} onChange={(e) => setS((p) => ({ ...p, charColSigma: parseFloat(e.target.value) }))} className="w-full" />
+                </>
+              )}
+            </div>
+
+            <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wider">Rows warp</div>
+                <button
+                  onClick={() => setS((p) => ({ ...p, charVarRowsOn: !p.charVarRowsOn }))}
+                  className={`p-1.5 rounded ${s.charVarRowsOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+                >
+                  {s.charVarRowsOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+                </button>
+              </div>
+              {s.charVarRowsOn && (
+                <>
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Focus Y: {s.charRowFocus.toFixed(2)}</label>
+                  <input type="range" min="0" max="1" step="0.01" value={s.charRowFocus} onChange={(e) => setS((p) => ({ ...p, charRowFocus: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Strength: {s.charRowStrength.toFixed(1)}</label>
+                  <input type="range" min="0" max="20" step="0.1" value={s.charRowStrength} onChange={(e) => setS((p) => ({ ...p, charRowStrength: parseFloat(e.target.value) }))} className="w-full" />
+                  <label className="block text-xs font-semibold uppercase tracking-wider">Band Width: {s.charRowSigma.toFixed(2)}</label>
+                  <input type="range" min="0.05" max="0.5" step="0.01" value={s.charRowSigma} onChange={(e) => setS((p) => ({ ...p, charRowSigma: parseFloat(e.target.value) }))} className="w-full" />
+                </>
+              )}
+            </div>
 
             <label className="block text-xs font-semibold uppercase tracking-wider">Char Size: {s.charSz}px</label>
             <input type="range" min="8" max="80" value={s.charSz} onChange={(e) => setS((p) => ({ ...p, charSz: parseInt(e.target.value, 10) }))} className="w-full" />
@@ -2598,10 +2602,146 @@ export default function App() {
           </div>
         </div>
 
-        {/* Melody (unchanged from your version) */}
-        {/* ... keep your Melody section exactly as-is ... */}
+        {/* Melody + Perc + MIDI + FX sections */}
+        {/* NOTE: unchanged from your paste (to keep behavior), except audio is now lazy-init. */}
 
-        {/* Percussion (UPDATED UI: shaping sliders added) */}
+        {/* Melody */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wider">Melody</label>
+            <button
+              onClick={() => setS((p) => ({ ...p, soundOn: !p.soundOn }))}
+              className={`p-1.5 rounded ${s.soundOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+            >
+              {s.soundOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+            </button>
+          </div>
+
+          <label className="block text-xs font-semibold uppercase tracking-wider">BPM: {s.bpm}</label>
+          <input type="range" min="40" max="220" value={s.bpm} onChange={(e) => setS((p) => ({ ...p, bpm: parseInt(e.target.value, 10) }))} className="w-full" />
+
+          <label className="block text-xs font-semibold uppercase tracking-wider">Max notes / step: {s.maxNotesPerStep}</label>
+          <input type="range" min="1" max="24" value={s.maxNotesPerStep} onChange={(e) => setS((p) => ({ ...p, maxNotesPerStep: parseInt(e.target.value, 10) }))} className="w-full" />
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Key</div>
+              <select value={s.keyRoot} onChange={(e) => setS((p) => ({ ...p, keyRoot: parseInt(e.target.value, 10) }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
+                {NOTE_NAMES.map((n, i) => (
+                  <option key={n} value={i}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Scale</div>
+              <select value={s.scaleName} onChange={(e) => setS((p) => ({ ...p, scaleName: e.target.value }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
+                {Object.keys(SCALES).map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <div className={`text-xs ${subtleText}`}>Oscillator</div>
+            <select value={s.melodyOsc} onChange={(e) => setS((p) => ({ ...p, melodyOsc: e.target.value }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
+              <option value="triangle">Triangle (clean)</option>
+              <option value="sine">Sine (pure)</option>
+              <option value="sawtooth">Saw (bright)</option>
+              <option value="square">Square (hollow)</option>
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <div className={`text-xs ${subtleText}`}>Chord mode</div>
+            <select value={s.chordType} onChange={(e) => setS((p) => ({ ...p, chordType: e.target.value }))} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}>
+              <option value="triad">Triads (3 notes)</option>
+              <option value="7">7ths (4 notes)</option>
+            </select>
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Progression</div>
+              <button onClick={randomizeProgression} className={`px-3 py-1.5 rounded text-xs font-semibold ${buttonMuted}`}>
+                Random
+              </button>
+            </div>
+
+            <select onChange={(e) => setProgressionPreset(e.target.value)} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`} defaultValue="">
+              <option value="" disabled>
+                Pick a preset…
+              </option>
+              {Object.keys(PROG_PRESETS).map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Degrees (comma-separated)</div>
+              <input type="text" value={progStr} onChange={(e) => setProgFromString(e.target.value)} className={`w-full px-2 py-2 border rounded-lg text-xs font-mono ${inputBg}`} placeholder="0,5,3,6" />
+              <div className={`text-[11px] ${subtleText}`}>Scale degrees (0–6). Values outside wrap.</div>
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Rate (columns per chord): {s.progRate}</div>
+              <input type="range" min="1" max="16" value={s.progRate} onChange={(e) => setS((p) => ({ ...p, progRate: parseInt(e.target.value, 10) }))} className="w-full" />
+            </div>
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider">Melody shaping</div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Cutoff base: {Math.round(s.cutoffBase)} Hz</div>
+              <input type="range" min="80" max="6000" step="10" value={s.cutoffBase} onChange={(e) => setS((p) => ({ ...p, cutoffBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Cutoff span: {Math.round(s.cutoffSpan)} Hz</div>
+              <input type="range" min="0" max="12000" step="10" value={s.cutoffSpan} onChange={(e) => setS((p) => ({ ...p, cutoffSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack base: {s.atkBase.toFixed(3)}s</div>
+              <input type="range" min="0.001" max="0.08" step="0.001" value={s.atkBase} onChange={(e) => setS((p) => ({ ...p, atkBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack span: {s.atkSpan.toFixed(3)}s</div>
+              <input type="range" min="0" max="0.25" step="0.001" value={s.atkSpan} onChange={(e) => setS((p) => ({ ...p, atkSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay base: {s.decBase.toFixed(3)}s</div>
+              <input type="range" min="0.02" max="0.6" step="0.005" value={s.decBase} onChange={(e) => setS((p) => ({ ...p, decBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay span: {s.decSpan.toFixed(3)}s</div>
+              <input type="range" min="0" max="2.0" step="0.01" value={s.decSpan} onChange={(e) => setS((p) => ({ ...p, decSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release base: {s.relBase.toFixed(3)}s</div>
+              <input type="range" min="0.02" max="0.8" step="0.01" value={s.relBase} onChange={(e) => setS((p) => ({ ...p, relBase: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release span: {s.relSpan.toFixed(3)}s</div>
+              <input type="range" min="0" max="2.0" step="0.01" value={s.relSpan} onChange={(e) => setS((p) => ({ ...p, relSpan: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
+
+          <div className={`text-[11px] ${subtleText}`}>
+            <b>How it plays:</b> it scans <b>left → right</b> one column per step. Painted cells in the current column become notes.
+            Notes are chosen from the current <b>chord</b> and mapped <b>top = higher</b>, <b>bottom = lower</b>. Quantized to {keyName} {s.scaleName}.
+          </div>
+        </div>
+
+        {/* Percussion */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold uppercase tracking-wider">Percussion</label>
@@ -2626,42 +2766,173 @@ export default function App() {
           <label className="block text-xs font-semibold uppercase tracking-wider">Max hits / step: {s.percMaxHitsPerStep}</label>
           <input type="range" min="1" max="24" value={s.percMaxHitsPerStep} onChange={(e) => setS((p) => ({ ...p, percMaxHitsPerStep: parseInt(e.target.value, 10) }))} className="w-full" />
 
-          {/* NEW: Perc shaping panel */}
-          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
-            <div className="text-xs font-semibold uppercase tracking-wider">Perc shaping</div>
-
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Level base: {s.percLevelBase.toFixed(2)}×</div>
-              <input type="range" min="0" max="2.5" step="0.01" value={s.percLevelBase} onChange={(e) => setS((p) => ({ ...p, percLevelBase: parseFloat(e.target.value) }))} className="w-full" />
-            </div>
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Level span: {s.percLevelSpan.toFixed(2)}×</div>
-              <input type="range" min="0" max="2.5" step="0.01" value={s.percLevelSpan} onChange={(e) => setS((p) => ({ ...p, percLevelSpan: parseFloat(e.target.value) }))} className="w-full" />
-            </div>
-
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Attack base: {s.percAtkBase.toFixed(4)}s</div>
-              <input type="range" min="0.0005" max="0.03" step="0.0005" value={s.percAtkBase} onChange={(e) => setS((p) => ({ ...p, percAtkBase: parseFloat(e.target.value) }))} className="w-full" />
-            </div>
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Attack span: {s.percAtkSpan.toFixed(4)}s</div>
-              <input type="range" min="0" max="0.06" step="0.0005" value={s.percAtkSpan} onChange={(e) => setS((p) => ({ ...p, percAtkSpan: parseFloat(e.target.value) }))} className="w-full" />
-            </div>
-
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Decay base: {s.percDecBase.toFixed(3)}s</div>
-              <input type="range" min="0.03" max="0.8" step="0.005" value={s.percDecBase} onChange={(e) => setS((p) => ({ ...p, percDecBase: parseFloat(e.target.value) }))} className="w-full" />
-            </div>
-            <div className="space-y-1">
-              <div className={`text-xs ${subtleText}`}>Decay span: {s.percDecSpan.toFixed(3)}s</div>
-              <input type="range" min="0" max="1.6" step="0.01" value={s.percDecSpan} onChange={(e) => setS((p) => ({ ...p, percDecSpan: parseFloat(e.target.value) }))} className="w-full" />
-            </div>
-          </div>
-
-          <div className={`text-[11px] ${subtleText}`}>Hue chooses drum type inside the kit. Attack/Decay/Level now shape the whole hit in real time.</div>
+          <div className={`text-[11px] ${subtleText}`}>Hue chooses drum type inside the kit. Acoustic kit uses softer drive + more resonance.</div>
         </div>
 
-        {/* ... keep your MIDI + FX sections exactly as-is ... */}
+        {/* MIDI */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wider">MIDI</label>
+            <button
+              onClick={() => setS((p) => ({ ...p, midiOn: !p.midiOn }))}
+              className={`p-1.5 rounded ${s.midiOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              title="Toggle MIDI"
+            >
+              {s.midiOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+            </button>
+          </div>
+
+          <div className={`text-[11px] ${subtleText}`}>{midiSupported ? "Web MIDI supported ✅" : "Web MIDI not supported in this browser ❌"}</div>
+
+          {midiSupported && (
+            <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Input</div>
+                <select value={midiInputId} onChange={(e) => setMidiInputId(e.target.value)} className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`} disabled={!s.midiOn}>
+                  {midiInputs.length === 0 && <option value="">No inputs</option>}
+                  {midiInputs.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setS((p) => ({ ...p, midiDraw: !p.midiDraw }))}
+                  className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
+                    s.midiDraw ? (isDark ? "bg-white text-black border-white" : "bg-black text-white border-black") : inputBg
+                  }`}
+                  disabled={!s.midiOn}
+                >
+                  Draw to grid
+                </button>
+                <button
+                  onClick={() => setS((p) => ({ ...p, midiThru: !p.midiThru }))}
+                  className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
+                    s.midiThru ? (isDark ? "bg-white text-black border-white" : "bg-black text-white border-black") : inputBg
+                  }`}
+                  disabled={!s.midiOn}
+                >
+                  Thru sound
+                </button>
+              </div>
+
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Channel (-1 = any)</div>
+                <input
+                  type="number"
+                  min={-1}
+                  max={15}
+                  value={s.midiChannel}
+                  onChange={(e) => setS((p) => ({ ...p, midiChannel: parseInt(e.target.value || "-1", 10) }))}
+                  className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                  disabled={!s.midiOn}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <div className={`text-xs ${subtleText}`}>Note low</div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={127}
+                    value={s.midiLo}
+                    onChange={(e) => setS((p) => ({ ...p, midiLo: parseInt(e.target.value || "0", 10) }))}
+                    className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                    disabled={!s.midiOn}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className={`text-xs ${subtleText}`}>Note high</div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={127}
+                    value={s.midiHi}
+                    onChange={(e) => setS((p) => ({ ...p, midiHi: parseInt(e.target.value || "127", 10) }))}
+                    className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                    disabled={!s.midiOn}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Fade min: {s.midiFadeMin.toFixed(2)}s</div>
+                <input type="range" min="0.05" max="3" step="0.01" value={s.midiFadeMin} onChange={(e) => setS((p) => ({ ...p, midiFadeMin: parseFloat(e.target.value) }))} className="w-full" disabled={!s.midiOn} />
+              </div>
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Fade max: {s.midiFadeMax.toFixed(2)}s</div>
+                <input type="range" min="0.1" max="8" step="0.01" value={s.midiFadeMax} onChange={(e) => setS((p) => ({ ...p, midiFadeMax: parseFloat(e.target.value) }))} className="w-full" disabled={!s.midiOn} />
+              </div>
+
+              <button
+                onClick={() => setS((p) => ({ ...p, midiQuantizeToScale: !p.midiQuantizeToScale }))}
+                className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] ${
+                  s.midiQuantizeToScale ? (isDark ? "bg-white text-black border-white" : "bg-black text-white border-black") : inputBg
+                }`}
+                disabled={!s.midiOn}
+              >
+                Quantize Thru to scale
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* FX */}
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider">FX</label>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Reverb</div>
+              <button
+                onClick={() => setS((p) => ({ ...p, reverbOn: !p.reverbOn }))}
+                className={`p-1.5 rounded ${s.reverbOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              >
+                {s.reverbOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+              </button>
+            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Mix: {s.reverbMix.toFixed(2)}</label>
+            <input type="range" min="0" max="0.8" step="0.01" value={s.reverbMix} onChange={(e) => setS((p) => ({ ...p, reverbMix: parseFloat(e.target.value) }))} className="w-full" />
+            <label className="block text-xs font-semibold uppercase tracking-wider">Time: {s.reverbTime.toFixed(1)}s</label>
+            <input type="range" min="0.5" max="6" step="0.1" value={s.reverbTime} onChange={(e) => setS((p) => ({ ...p, reverbTime: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Delay</div>
+              <button
+                onClick={() => setS((p) => ({ ...p, delayOn: !p.delayOn }))}
+                className={`p-1.5 rounded ${s.delayOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              >
+                {s.delayOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+              </button>
+            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Mix: {s.delayMix.toFixed(2)}</label>
+            <input type="range" min="0" max="0.8" step="0.01" value={s.delayMix} onChange={(e) => setS((p) => ({ ...p, delayMix: parseFloat(e.target.value) }))} className="w-full" />
+            <label className="block text-xs font-semibold uppercase tracking-wider">Time: {s.delayTime.toFixed(2)}s</label>
+            <input type="range" min="0.05" max="0.9" step="0.01" value={s.delayTime} onChange={(e) => setS((p) => ({ ...p, delayTime: parseFloat(e.target.value) }))} className="w-full" />
+            <label className="block text-xs font-semibold uppercase tracking-wider">Feedback: {s.delayFeedback.toFixed(2)}</label>
+            <input type="range" min="0" max="0.85" step="0.01" value={s.delayFeedback} onChange={(e) => setS((p) => ({ ...p, delayFeedback: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Drive</div>
+              <button
+                onClick={() => setS((p) => ({ ...p, driveOn: !p.driveOn }))}
+                className={`p-1.5 rounded ${s.driveOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              >
+                {s.driveOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+              </button>
+            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wider">Amount: {s.drive.toFixed(2)}</label>
+            <input type="range" min="0" max="1" step="0.01" value={s.drive} onChange={(e) => setS((p) => ({ ...p, drive: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+        </div>
 
         <div className={`text-[11px] ${isDark ? "text-neutral-400" : "text-neutral-500"}`}>
           If you hear nothing: press <b>Enable Audio</b> once (browser rule).
