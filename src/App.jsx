@@ -240,10 +240,19 @@ function triggerPerc(ac, dest, opts) {
     punch = 0.65,
     driveAmt = 0.0,
     acoustic = false,
+
+    // NEW: shaping
+    attack = 0.002,
+    release = 0.06,
+    level = 1.0,
   } = opts;
 
   const now = ac.currentTime;
-  const v = clamp(vel, 0, 1);
+  const v = clamp(vel, 0, 1) * clamp(level ?? 1.0, 0, 3);
+
+  const atk = clamp(attack ?? 0.002, 0.0005, 0.08);
+  const rel = clamp(release ?? 0.06, 0.01, 1.2);
+  const dec = clamp(decay ?? 0.18, 0.02, 1.8);
 
   const out = ac.createGain();
   out.gain.setValueAtTime(1.0, now);
@@ -274,15 +283,15 @@ function triggerPerc(ac, dest, opts) {
   clickGain.gain.setValueAtTime(0.0, now);
   clickGain.gain.linearRampToValueAtTime(
     (type === "wood" || type === "rim" ? 0.55 : acoustic ? 0.22 : 0.35) * v * (0.5 + punch),
-    now + 0.001
+    now + atk
   );
-  clickGain.gain.exponentialRampToValueAtTime(0.00001, now + (type === "shaker" ? 0.04 : 0.02));
+  clickGain.gain.exponentialRampToValueAtTime(0.00001, now + atk + (type === "shaker" ? 0.04 : 0.02) + rel * 0.25);
 
   click.connect(clickHP);
   clickHP.connect(clickGain);
 
   // noise
-  const nDur = clamp(0.03 + decay * 0.9, 0.05, 1.6);
+  const nDur = clamp(0.03 + dec * 0.9 + rel * 0.25, 0.05, 2.2);
   const noiseBuf = makeNoiseBuffer(ac, nDur);
   const noise = ac.createBufferSource();
   noise.buffer = noiseBuf;
@@ -322,10 +331,10 @@ function triggerPerc(ac, dest, opts) {
       : acoustic ? 0.75 : 0.95;
 
   noiseGain.gain.setValueAtTime(0.0, now);
-  noiseGain.gain.linearRampToValueAtTime(noiseAmt * v * (1 - tone), now + 0.002);
+  noiseGain.gain.linearRampToValueAtTime(noiseAmt * v * (1 - tone), now + clamp(atk * 0.8, 0.0008, 0.03));
   noiseGain.gain.exponentialRampToValueAtTime(
     0.00001,
-    now + clamp(decay, 0.03, 1.8) * (type === "shaker" ? 1.2 : 1.0)
+    now + atk + clamp(dec, 0.03, 1.8) * (type === "shaker" ? 1.2 : 1.0) + rel * 0.7
   );
 
   noise.connect(noiseBP);
@@ -370,12 +379,16 @@ function triggerPerc(ac, dest, opts) {
       ? 0.05
       : acoustic ? 0.10 : 0.12;
 
-  const a = type === "wood" || type === "rim" ? 0.0009 : acoustic ? 0.0022 : 0.0015;
-  const d = clamp(decay, 0.03, 1.8) * (type === "wood" || type === "rim" ? 0.55 : acoustic ? 1.25 : 1.0);
+  const aBase = type === "wood" || type === "rim" ? 0.0009 : acoustic ? 0.0022 : 0.0015;
+  const a = clamp(Math.max(aBase, atk), 0.0006, 0.08);
+
+  const dBase =
+    clamp(dec, 0.03, 1.8) * (type === "wood" || type === "rim" ? 0.55 : acoustic ? 1.25 : 1.0);
+  const d = clamp(dBase + rel * 0.55, 0.03, 2.6);
 
   bodyGain.gain.setValueAtTime(0.0, now);
   bodyGain.gain.linearRampToValueAtTime(bodyAmt * v * tone, now + a);
-  bodyGain.gain.exponentialRampToValueAtTime(0.00001, now + d);
+  bodyGain.gain.exponentialRampToValueAtTime(0.00001, now + a + d);
 
   // “wood” extra resonator
   const woodRes = ac.createBiquadFilter();
@@ -404,13 +417,13 @@ function triggerPerc(ac, dest, opts) {
   shaper.connect(dest);
 
   click.start(now);
-  click.stop(now + 0.04);
+  click.stop(now + 0.04 + rel * 0.2);
 
   noise.start(now);
-  noise.stop(now + nDur + 0.05);
+  noise.stop(now + nDur + 0.05 + rel * 0.3);
 
   body.start(now);
-  body.stop(now + d + 0.1);
+  body.stop(now + a + d + 0.12);
 }
 
 /* =======================
@@ -558,6 +571,13 @@ export default function App() {
     percPunch: 0.7,
     percBright: 0.55,
     percDrive: 0.08,
+
+    // NEW: percussion shaping (attack/decay/level/release)
+    percLevel: 1.0,
+    percAtkBase: 0.002,
+    percAtkSpan: 0.03,
+    percRelBase: 0.05,
+    percRelSpan: 0.35,
 
     // percussion kit
     percKit: "classic", // classic | wood | soft | acoustic
@@ -1140,6 +1160,10 @@ export default function App() {
       const freq = midiToFreq(pm);
 
       const acoustic = kit === "acoustic";
+
+      const pAtk = clamp((st.percAtkBase ?? 0.002) + (st.percAtkSpan ?? 0.03) * (1 - rowNorm), 0.0006, 0.08);
+      const pRel = clamp((st.percRelBase ?? 0.05) + (st.percRelSpan ?? 0.35) * rowNorm, 0.01, 1.2);
+
       triggerPerc(A.ac, A.percBus, {
         type,
         freq,
@@ -1152,6 +1176,11 @@ export default function App() {
         punch: clamp(st.percPunch ?? 0.7, 0, 1) * (acoustic ? 0.92 : 1),
         driveAmt: clamp(st.percDrive ?? 0.08, 0, 1) * (acoustic ? 0.35 : 1),
         acoustic,
+
+        // NEW
+        attack: pAtk,
+        release: pRel,
+        level: clamp(st.percLevel ?? 1.0, 0, 3),
       });
     }
   }, []);
@@ -1478,6 +1507,7 @@ export default function App() {
           const fOld = midiToFreq(midiOld);
           const freq = morph < 1 ? blendFreq(fOld, fNow) : fNow;
 
+          // Level affects this vel downstream too (inside triggerPerc)
           const vel = clamp(0.12 + 0.88 * lum, 0.05, 1);
 
           let decay =
@@ -1492,11 +1522,30 @@ export default function App() {
 
           decay = clamp(decay, 0.03, 1.7) * (acoustic ? 1.15 : 1);
 
+          // NEW: attack + release shaping for perc (like melody-style)
+          let atk = (st.percAtkBase ?? 0.002) + (st.percAtkSpan ?? 0.03) * clamp(1 - rowNormNow, 0, 1);
+          let rel = (st.percRelBase ?? 0.05) + (st.percRelSpan ?? 0.35) * clamp(rowNormNow, 0, 1);
+
+          if (isSwiss && st.varRowsOn && re) {
+            const rh = (re[r + 1] ?? (r + 1) / rows) - (re[r] ?? r / rows);
+            const ratio = clamp(rh / avgRowH, 0.35, 2.4);
+            // longer tails in taller cells
+            rel *= clamp(ratio, 0.75, 1.6);
+            atk *= clamp(1.15 - (ratio - 1) * 0.2, 0.6, 1.4);
+          }
+
+          atk = clamp(atk, 0.0006, 0.08);
+          rel = clamp(rel, 0.01, 1.2);
+
           hits.push({
             type,
             freq,
             vel,
             decay,
+            attack: atk,
+            release: rel,
+            level: clamp(st.percLevel ?? 1.0, 0, 3),
+
             tone: clamp(st.percTone ?? 0.45, 0, 1),
             punch: clamp(st.percPunch ?? 0.7, 0, 1) * (acoustic ? 0.92 : 1),
             bright: clamp((st.percBright ?? 0.55) * (0.6 + lum * 0.6), 0, 1),
@@ -1520,6 +1569,11 @@ export default function App() {
             bright: h.bright,
             driveAmt: h.driveAmt,
             acoustic: h.acoustic,
+
+            // NEW
+            attack: h.attack,
+            release: h.release,
+            level: h.level,
           });
         }
       }
@@ -2602,9 +2656,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Melody + Perc + MIDI + FX sections */}
-        {/* NOTE: unchanged from your paste (to keep behavior), except audio is now lazy-init. */}
-
         {/* Melody */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -2765,6 +2816,116 @@ export default function App() {
 
           <label className="block text-xs font-semibold uppercase tracking-wider">Max hits / step: {s.percMaxHitsPerStep}</label>
           <input type="range" min="1" max="24" value={s.percMaxHitsPerStep} onChange={(e) => setS((p) => ({ ...p, percMaxHitsPerStep: parseInt(e.target.value, 10) }))} className="w-full" />
+
+          {/* NEW: Percussion shaping controls */}
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider">Percussion shaping</div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Level: {s.percLevel.toFixed(2)}×</div>
+              <input
+                type="range"
+                min="0"
+                max="2.5"
+                step="0.01"
+                value={s.percLevel}
+                onChange={(e) => setS((p) => ({ ...p, percLevel: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack base: {s.percAtkBase.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0.0005"
+                max="0.05"
+                step="0.0005"
+                value={s.percAtkBase}
+                onChange={(e) => setS((p) => ({ ...p, percAtkBase: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack span: {s.percAtkSpan.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0"
+                max="0.12"
+                step="0.001"
+                value={s.percAtkSpan}
+                onChange={(e) => setS((p) => ({ ...p, percAtkSpan: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay base: {s.percDecayBase.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0.02"
+                max="0.8"
+                step="0.005"
+                value={s.percDecayBase}
+                onChange={(e) => setS((p) => ({ ...p, percDecayBase: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay span: {s.percDecaySpan.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0"
+                max="1.8"
+                step="0.01"
+                value={s.percDecaySpan}
+                onChange={(e) => setS((p) => ({ ...p, percDecaySpan: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release base: {s.percRelBase.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0.01"
+                max="0.8"
+                step="0.01"
+                value={s.percRelBase}
+                onChange={(e) => setS((p) => ({ ...p, percRelBase: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release span: {s.percRelSpan.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0"
+                max="1.6"
+                step="0.01"
+                value={s.percRelSpan}
+                onChange={(e) => setS((p) => ({ ...p, percRelSpan: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Tone: {s.percTone.toFixed(2)}</div>
+              <input type="range" min="0" max="1" step="0.01" value={s.percTone} onChange={(e) => setS((p) => ({ ...p, percTone: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Bright: {s.percBright.toFixed(2)}</div>
+              <input type="range" min="0" max="1" step="0.01" value={s.percBright} onChange={(e) => setS((p) => ({ ...p, percBright: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Punch: {s.percPunch.toFixed(2)}</div>
+              <input type="range" min="0" max="1" step="0.01" value={s.percPunch} onChange={(e) => setS((p) => ({ ...p, percPunch: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Drive: {s.percDrive.toFixed(2)}</div>
+              <input type="range" min="0" max="1" step="0.01" value={s.percDrive} onChange={(e) => setS((p) => ({ ...p, percDrive: parseFloat(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
 
           <div className={`text-[11px] ${subtleText}`}>Hue chooses drum type inside the kit. Acoustic kit uses softer drive + more resonance.</div>
         </div>
