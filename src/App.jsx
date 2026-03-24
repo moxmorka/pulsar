@@ -1,6 +1,6 @@
 // App.jsx
 import React from "react";
-import { RotateCcw, Download, Play, Square, Palette, Moon, Sun, Layers } from "lucide-react";
+import { RotateCcw, Download, Play, Square, Palette, Moon, Sun, Layers, Save, FolderOpen, Trash2, Upload } from "lucide-react";
 
 /* =======================
    Utilities
@@ -489,17 +489,20 @@ export default function App() {
   const canvasPxRef = React.useRef({ w: 800, h: 600 });
 
   // LAYERS
-  const [activeLayer, setActiveLayer] = React.useState("melody"); // melody | perc
+  const [activeLayer, setActiveLayer] = React.useState("melody"); // melody | perc | sampler
   const [layerView, setLayerView] = React.useState("both"); // both | active | ghost
   const [ghostOpacity, setGhostOpacity] = React.useState(0.28);
 
-  // CELLS: melody + percussion
+  // CELLS: melody + percussion + sampler
   const [cellsMel, setCellsMel] = React.useState([]);
   const [cellsPerc, setCellsPerc] = React.useState([]);
+  const [cellsSampler, setCellsSampler] = React.useState([]);
   const cellsMelRef = React.useRef([]);
   const cellsPercRef = React.useRef([]);
+  const cellsSamplerRef = React.useRef([]);
   React.useEffect(() => void (cellsMelRef.current = cellsMel), [cellsMel]);
   React.useEffect(() => void (cellsPercRef.current = cellsPerc), [cellsPerc]);
+  React.useEffect(() => void (cellsSamplerRef.current = cellsSampler), [cellsSampler]);
 
   const [panelOpen, setPanelOpen] = React.useState(false);
 
@@ -648,6 +651,25 @@ export default function App() {
     // NEW: sample
     percUseSample: false,
     percSampleRootMidi: 36, // pitch reference for uploaded wav
+
+    // ======= SAMPLER =======
+    samplerOn: true,
+    samplerVol: 0.8,
+    samplerMaxHitsPerStep: 6,
+    samplerRhythmMul: 1.0,
+    samplerProgFollow: true,
+    samplerProg: [0, 5, 3, 6],
+    samplerProgRate: 4,
+    samplerBaseMidi: 48,
+    samplerOctaveSpan: 4,
+    samplerRootMidi: 48,
+    samplerLevel: 1.0,
+    samplerAtkBase: 0.002,
+    samplerAtkSpan: 0.04,
+    samplerDecayBase: 0.18,
+    samplerDecaySpan: 0.8,
+    samplerRelBase: 0.08,
+    samplerRelSpan: 0.5,
 
     // audition
     auditionOnPaint: true,
@@ -837,20 +859,35 @@ export default function App() {
   /* =======================
      Cell CRUD per layer
 ======================= */
-  const upsertCellLayer = React.useCallback((layer, idx, patch) => {
-    const setFn = layer === "perc" ? setCellsPerc : setCellsMel;
-    setFn((prev) => {
-      const ex = prev.findIndex((c) => c.idx === idx);
-      const next = [...prev];
-      if (ex >= 0) next[ex] = { ...next[ex], ...patch };
-      else next.push({ idx, ...patch });
-      return next;
-    });
-  }, []);
-  const removeCellLayer = React.useCallback((layer, idx) => {
-    const setFn = layer === "perc" ? setCellsPerc : setCellsMel;
-    setFn((prev) => prev.filter((c) => c.idx !== idx));
-  }, []);
+  const getLayerSetter = React.useCallback(
+    (layer) => {
+      if (layer === "perc") return setCellsPerc;
+      if (layer === "sampler") return setCellsSampler;
+      return setCellsMel;
+    },
+    [setCellsMel, setCellsPerc, setCellsSampler]
+  );
+
+  const upsertCellLayer = React.useCallback(
+    (layer, idx, patch) => {
+      const setFn = getLayerSetter(layer);
+      setFn((prev) => {
+        const ex = prev.findIndex((c) => c.idx === idx);
+        const next = [...prev];
+        if (ex >= 0) next[ex] = { ...next[ex], ...patch };
+        else next.push({ idx, ...patch });
+        return next;
+      });
+    },
+    [getLayerSetter]
+  );
+  const removeCellLayer = React.useCallback(
+    (layer, idx) => {
+      const setFn = getLayerSetter(layer);
+      setFn((prev) => prev.filter((c) => c.idx !== idx));
+    },
+    [getLayerSetter]
+  );
 
   /* =======================
      AUDIO GRAPH (lazy init)
@@ -860,6 +897,7 @@ export default function App() {
     master: null,
     melodyBus: null,
     percBus: null,
+    samplerBus: null,
     dry: null,
     wetRev: null,
     wetDel: null,
@@ -875,6 +913,7 @@ export default function App() {
     // NEW: independent scan phase
     melPhase: 0,
     percPhase: 0,
+    samplerPhase: 0,
 
     timer: null,
     _revTime: null,
@@ -882,6 +921,8 @@ export default function App() {
     // NEW: sample
     percSampleBuffer: null,
     percSampleName: "",
+    samplerSampleBuffer: null,
+    samplerSampleName: "",
   });
 
   function ensureAudio() {
@@ -897,6 +938,9 @@ export default function App() {
 
       const percBus = ac.createGain();
       percBus.gain.value = clamp(sRef.current.percVol ?? 0.85, 0, 1.5);
+
+      const samplerBus = ac.createGain();
+      samplerBus.gain.value = clamp(sRef.current.samplerVol ?? 0.8, 0, 1.5);
 
       const drive = ac.createWaveShaper();
       drive.oversample = "2x";
@@ -917,6 +961,7 @@ export default function App() {
 
       melodyBus.connect(drive);
       percBus.connect(drive);
+      samplerBus.connect(drive);
 
       drive.connect(dry);
       drive.connect(convolver);
@@ -935,6 +980,7 @@ export default function App() {
       A.master = master;
       A.melodyBus = melodyBus;
       A.percBus = percBus;
+      A.samplerBus = samplerBus;
       A.drive = drive;
       A.dry = dry;
       A.wetRev = wetRev;
@@ -951,6 +997,7 @@ export default function App() {
       A.step = 0;
       A.melPhase = 0;
       A.percPhase = 0;
+      A.samplerPhase = 0;
 
       updateAudioParamsRealtime();
       ensureVoices();
@@ -975,6 +1022,7 @@ export default function App() {
 
     A.melodyBus.gain.setTargetAtTime(clamp(st.melodyVol ?? 0.9, 0, 1.5), now, 0.02);
     A.percBus.gain.setTargetAtTime(clamp(st.percVol ?? 0.85, 0, 1.5), now, 0.02);
+    A.samplerBus.gain.setTargetAtTime(clamp(st.samplerVol ?? 0.8, 0, 1.5), now, 0.02);
     A.master.gain.setTargetAtTime(clamp(st.master, 0, 1.2), now, 0.02);
 
     // drive
@@ -1035,7 +1083,7 @@ export default function App() {
   /* =======================
      Sample upload handler
 ======================= */
-  const onPercSampleUpload = async (file) => {
+  const loadSampleToSlot = async (file, slot = "perc") => {
     if (!file) return;
     await unlockAudio();
     const A = ensureAudio();
@@ -1044,14 +1092,27 @@ export default function App() {
     try {
       const ab = await file.arrayBuffer();
       const buf = await A.ac.decodeAudioData(ab.slice(0));
-      audioRef.current.percSampleBuffer = buf;
-      audioRef.current.percSampleName = file.name || "sample.wav";
+      if (slot === "sampler") {
+        audioRef.current.samplerSampleBuffer = buf;
+        audioRef.current.samplerSampleName = file.name || "sample.wav";
+      } else {
+        audioRef.current.percSampleBuffer = buf;
+        audioRef.current.percSampleName = file.name || "sample.wav";
+      }
     } catch (e) {
       console.warn("Failed to decode sample:", e);
-      audioRef.current.percSampleBuffer = null;
-      audioRef.current.percSampleName = "";
+      if (slot === "sampler") {
+        audioRef.current.samplerSampleBuffer = null;
+        audioRef.current.samplerSampleName = "";
+      } else {
+        audioRef.current.percSampleBuffer = null;
+        audioRef.current.percSampleName = "";
+      }
     }
   };
+
+  const onPercSampleUpload = async (file) => loadSampleToSlot(file, "perc");
+  const onSamplerSampleUpload = async (file) => loadSampleToSlot(file, "sampler");
 
   /* =======================
      Grid dims helper
@@ -1227,6 +1288,30 @@ export default function App() {
         release: 0.12,
         oscType: st.melodyOsc ?? "triangle",
       });
+    } else if (layerKey === "sampler") {
+      const samplerDegreesCount = 7 * clamp(st.samplerOctaveSpan ?? 4, 1, 7);
+      const samplerScaleMidi = buildScaleMidi({
+        rootPc: clamp(st.keyRoot ?? 0, 0, 11),
+        scaleName: st.scaleName,
+        baseMidi: clamp(st.samplerBaseMidi ?? 48, 12, 84),
+        degreesCount: samplerDegreesCount,
+      });
+      const midi = samplerScaleMidi[clamp(Math.round(rowNorm * (samplerDegreesCount - 1)), 0, samplerDegreesCount - 1)];
+      const freq = midiToFreq(midi);
+      const rootFreq = midiToFreq(clamp(st.samplerRootMidi ?? 48, 0, 127));
+
+      if (A.samplerSampleBuffer) {
+        triggerPercSample(A.ac, A.samplerBus, {
+          buffer: A.samplerSampleBuffer,
+          vel,
+          freq,
+          rootFreq,
+          decay: clamp((st.samplerDecayBase ?? 0.18) + (st.samplerDecaySpan ?? 0.8) * (0.35 + lum * 0.65), 0.03, 2.2),
+          attack: clamp((st.samplerAtkBase ?? 0.002) + (st.samplerAtkSpan ?? 0.04) * (1 - rowNorm), 0.0006, 0.08),
+          release: clamp((st.samplerRelBase ?? 0.08) + (st.samplerRelSpan ?? 0.5) * rowNorm, 0.01, 1.5),
+          level: clamp(st.samplerLevel ?? 1.0, 0, 3),
+        });
+      }
     } else {
       const h = rgb ? hue01(rgb) : 0.4;
 
@@ -1306,7 +1391,7 @@ export default function App() {
 ======================= */
   const applyPaintToIdx = (idx, r, c, t, rows, cols) => {
     if (idx == null) return;
-    const layerKey = activeLayer === "perc" ? "perc" : "melody";
+    const layerKey = activeLayer === "perc" ? "perc" : activeLayer === "sampler" ? "sampler" : "melody";
 
     if (paint.mode === "none") {
       removeCellLayer(layerKey, idx);
@@ -1321,16 +1406,18 @@ export default function App() {
     }
 
     upsertCellLayer(layerKey, idx, { paint: { mode: "color", color: chosenColor } });
-    auditionPaint(layerKey === "perc" ? "perc" : "melody", r, c, rows, cols, chosenColor);
+    auditionPaint(layerKey, r, c, rows, cols, chosenColor);
   };
 
   const gen = () => {
     setCellsMel((p) => [...p]);
     setCellsPerc((p) => [...p]);
+    setCellsSampler((p) => [...p]);
   };
 
   const clearPaint = () => {
     if (activeLayer === "perc") setCellsPerc([]);
+    else if (activeLayer === "sampler") setCellsSampler([]);
     else setCellsMel([]);
   };
 
@@ -1347,11 +1434,14 @@ export default function App() {
 
       const melNow = cellsMelRef.current;
       const percNow = cellsPercRef.current;
+      const samplerNow = cellsSamplerRef.current;
 
       const melMap = new Map();
       const percMap = new Map();
+      const samplerMap = new Map();
       for (const c of melNow) melMap.set(c.idx, c);
       for (const c of percNow) percMap.set(c.idx, c);
+      for (const c of samplerNow) samplerMap.set(c.idx, c);
 
       const isSwiss = st.pat === "swiss-grid";
       const dims = getGridDims();
@@ -1424,6 +1514,7 @@ export default function App() {
       // ===== columns for each layer (NEW: independent rhythm)
       const melCol = Math.floor(audioRef.current.melPhase) % cols;
       const percCol = Math.floor(audioRef.current.percPhase) % cols;
+      const samplerCol = Math.floor((audioRef.current.samplerPhase ?? audioRef.current.melPhase)) % cols;
 
       // progression / chords — MELODY
       const progMel = Array.isArray(st.prog) && st.prog.length ? st.prog : [0, 5, 3, 6];
@@ -1481,6 +1572,35 @@ export default function App() {
       const chordTonesOldPerc = degreeToChordTones(
         percScaleMidi,
         chordDegreeOldPerc,
+        st.chordType === "triad" ? "triad" : "7"
+      );
+
+      const samplerDegreesCount = 7 * clamp(st.samplerOctaveSpan ?? 4, 1, 7);
+      const samplerScaleMidi = buildScaleMidi({
+        rootPc: clamp(st.keyRoot ?? 0, 0, 11),
+        scaleName: st.scaleName,
+        baseMidi: clamp(st.samplerBaseMidi ?? 48, 12, 84),
+        degreesCount: samplerDegreesCount,
+      });
+      const progSampler = st.samplerProgFollow
+        ? progMel
+        : Array.isArray(st.samplerProg) && st.samplerProg.length
+        ? st.samplerProg
+        : [0, 5, 3, 6];
+      const progRateSampler = st.samplerProgFollow ? progRateMel : Math.max(1, st.samplerProgRate | 0);
+      const chordIndexNowSampler = Math.floor(samplerCol / progRateSampler) % progSampler.length;
+      const chordDegreeNowSampler = ((progSampler[chordIndexNowSampler] | 0) % 7 + 7) % 7;
+      const oldSamplerCol = getOldColIndex(samplerCol);
+      const chordIndexOldSampler = Math.floor(oldSamplerCol / progRateSampler) % progSampler.length;
+      const chordDegreeOldSampler = ((progSampler[chordIndexOldSampler] | 0) % 7 + 7) % 7;
+      const chordTonesNowSampler = degreeToChordTones(
+        samplerScaleMidi,
+        chordDegreeNowSampler,
+        st.chordType === "triad" ? "triad" : "7"
+      );
+      const chordTonesOldSampler = degreeToChordTones(
+        samplerScaleMidi,
+        chordDegreeOldSampler,
         st.chordType === "triad" ? "triad" : "7"
       );
 
@@ -1754,6 +1874,93 @@ export default function App() {
         }
       }
 
+      // ===== SAMPLER
+      if (st.samplerOn && canPlay && A.samplerSampleBuffer) {
+        const hits = [];
+        const maxHits = clamp(st.samplerMaxHitsPerStep ?? 6, 1, 32);
+
+        for (let r = 0; r < rows; r++) {
+          const idx = r * cols + samplerCol;
+          const cell = samplerMap.get(idx);
+          const paintObj = cell?.paint;
+          if (!paintObj?.color) continue;
+          if (typeof cell.expiresAt === "number" && cell.expiresAt <= nowS) continue;
+
+          const rgb = hexToRgb(paintObj.color);
+          if (!rgb) continue;
+
+          const lum = luminance01(rgb);
+          const h = hue01(rgb);
+
+          const rowNormNow = rows <= 1 ? 0.5 : 1 - r / (rows - 1);
+          const oldR = getOldRowIndex(r);
+          const oldRows =
+            prevSnap
+              ? prevSnap.pat === "swiss-grid"
+                ? Math.max(1, prevSnap.rows | 0)
+                : Math.max(1, prevSnap.charEffRows | 0)
+              : rows;
+          const rowNormOld = oldRows <= 1 ? 0.5 : 1 - oldR / (oldRows - 1);
+
+          const laneNow = clamp(Math.floor(h * chordTonesNowSampler.length), 0, chordTonesNowSampler.length - 1);
+          const laneOld = clamp(Math.floor(h * chordTonesOldSampler.length), 0, chordTonesOldSampler.length - 1);
+
+          const degIdxNow = clamp(Math.round(rowNormNow * (samplerDegreesCount - 1)), 0, samplerDegreesCount - 1);
+          const rowMidiNow = samplerScaleMidi[degIdxNow];
+          const degIdxOld = clamp(Math.round(rowNormOld * (samplerDegreesCount - 1)), 0, samplerDegreesCount - 1);
+          const rowMidiOld = samplerScaleMidi[degIdxOld];
+
+          let targetNow = chordTonesNowSampler[laneNow];
+          while (targetNow < rowMidiNow - 8) targetNow += 12;
+          while (targetNow > rowMidiNow + 8) targetNow -= 12;
+
+          let targetOld = chordTonesOldSampler[laneOld];
+          while (targetOld < rowMidiOld - 8) targetOld += 12;
+          while (targetOld > rowMidiOld + 8) targetOld -= 12;
+
+          const freq = morph < 1 ? blendFreq(midiToFreq(targetOld), midiToFreq(targetNow)) : midiToFreq(targetNow);
+          let decay =
+            (st.samplerDecayBase ?? 0.18) +
+            (st.samplerDecaySpan ?? 0.8) * clamp((1 - rowNormNow) * 0.55 + lum * 0.65, 0, 1);
+          let atk = (st.samplerAtkBase ?? 0.002) + (st.samplerAtkSpan ?? 0.04) * clamp(1 - rowNormNow, 0, 1);
+          let rel = (st.samplerRelBase ?? 0.08) + (st.samplerRelSpan ?? 0.5) * clamp(rowNormNow, 0, 1);
+
+          if (isSwiss && st.varRowsOn && re) {
+            const rh = (re[r + 1] ?? (r + 1) / rows) - (re[r] ?? r / rows);
+            const ratio = clamp(rh / avgRowH, 0.35, 2.4);
+            decay *= clamp(ratio, 0.7, 1.8);
+            rel *= clamp(ratio, 0.75, 1.7);
+          }
+
+          hits.push({
+            freq,
+            vel: clamp(0.1 + 0.9 * lum, 0.05, 1),
+            decay: clamp(decay, 0.03, 2.5),
+            attack: clamp(atk, 0.0006, 0.08),
+            release: clamp(rel, 0.01, 1.6),
+            level: clamp(st.samplerLevel ?? 1.0, 0, 3),
+            score: lum,
+          });
+        }
+
+        hits.sort((a, b) => b.score - a.score);
+        const chosen = hits.slice(0, Math.min(maxHits, hits.length));
+        const rootFreq = midiToFreq(clamp(st.samplerRootMidi ?? 48, 0, 127));
+
+        for (const h of chosen) {
+          triggerPercSample(A.ac, A.samplerBus, {
+            buffer: A.samplerSampleBuffer,
+            vel: h.vel,
+            freq: h.freq,
+            rootFreq,
+            decay: h.decay,
+            attack: h.attack,
+            release: h.release,
+            level: h.level,
+          });
+        }
+      }
+
       // advance phases
       audioRef.current.step++;
       audioRef.current.melPhase += 1;
@@ -1761,9 +1968,13 @@ export default function App() {
       const mul = clamp(st.percRhythmMul ?? 1.0, 0.25, 4.0);
       audioRef.current.percPhase += mul;
 
+      const samplerMul = clamp(st.samplerRhythmMul ?? 1.0, 0.25, 4.0);
+      audioRef.current.samplerPhase += samplerMul;
+
       // keep phases bounded
       if (audioRef.current.melPhase > 1e9) audioRef.current.melPhase = audioRef.current.melPhase % cols;
       if (audioRef.current.percPhase > 1e9) audioRef.current.percPhase = audioRef.current.percPhase % cols;
+      if (audioRef.current.samplerPhase > 1e9) audioRef.current.samplerPhase = audioRef.current.samplerPhase % cols;
 
       audioRef.current.timer = setTimeout(tick, Math.max(10, stepSec * 1000));
     };
@@ -2088,8 +2299,10 @@ export default function App() {
 
     const melMap = new Map();
     const percMap = new Map();
+    const samplerMap = new Map();
     for (const c of cellsMel) melMap.set(c.idx, c);
     for (const c of cellsPerc) percMap.set(c.idx, c);
+    for (const c of cellsSampler) samplerMap.set(c.idx, c);
 
     const drawGrid = () => {
       if (!s.gridLines) return;
@@ -2244,30 +2457,28 @@ export default function App() {
 
     drawGrid();
 
+    const orderedMaps = [
+      ["melody", melMap],
+      ["perc", percMap],
+      ["sampler", samplerMap],
+    ];
+
     if (layerView === "ghost") {
-      if (activeLayer === "melody") {
-        drawLayerCells(melMap, 1.0);
-        drawLayerCells(percMap, clamp(ghostOpacity, 0, 1));
-      } else {
-        drawLayerCells(percMap, 1.0);
-        drawLayerCells(melMap, clamp(ghostOpacity, 0, 1));
+      for (const [name, map] of orderedMaps) {
+        drawLayerCells(map, name === activeLayer ? 1.0 : clamp(ghostOpacity, 0, 1));
       }
       return;
     }
 
     if (layerView === "both") {
-      if (activeLayer === "melody") {
-        drawLayerCells(percMap, 0.78);
-        drawLayerCells(melMap, 1.0);
-      } else {
-        drawLayerCells(melMap, 0.78);
-        drawLayerCells(percMap, 1.0);
+      for (const [name, map] of orderedMaps) {
+        drawLayerCells(map, name === activeLayer ? 1.0 : 0.78);
       }
       return;
     }
 
-    if (activeLayer === "melody") drawLayerCells(melMap, 1.0);
-    else drawLayerCells(percMap, 1.0);
+    const activeMap = activeLayer === "perc" ? percMap : activeLayer === "sampler" ? samplerMap : melMap;
+    drawLayerCells(activeMap, 1.0);
   };
 
   React.useEffect(() => {
@@ -2278,7 +2489,7 @@ export default function App() {
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s, cellsMel, cellsPerc, colEdges, rowEdges, activeLayer, layerView, ghostOpacity, isDark]);
+  }, [s, cellsMel, cellsPerc, cellsSampler, colEdges, rowEdges, activeLayer, layerView, ghostOpacity, isDark]);
 
   // resize canvas
   React.useEffect(() => {
@@ -2377,6 +2588,173 @@ export default function App() {
   };
 
   const sampleLabel = audioRef.current.percSampleName || "No sample loaded";
+  const samplerSampleLabel = audioRef.current.samplerSampleName || "No sample loaded";
+
+  const PRESET_STORAGE_KEY = "grid-music-presets-v1";
+  const SESSION_STORAGE_KEY = "grid-music-session-v1";
+  const [presetName, setPresetName] = React.useState("");
+  const [presetNames, setPresetNames] = React.useState([]);
+
+  const makePresetPayload = React.useCallback(
+    () => ({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      theme,
+      paint,
+      ui: {
+        activeLayer,
+        layerView,
+        ghostOpacity,
+      },
+      settings: sRef.current,
+      cells: {
+        melody: cellsMelRef.current,
+        percussion: cellsPercRef.current,
+        sampler: cellsSamplerRef.current,
+      },
+    }),
+    [theme, paint, activeLayer, layerView, ghostOpacity]
+  );
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      const presets = raw ? JSON.parse(raw) : {};
+      setPresetNames(Object.keys(presets).sort((a, b) => a.localeCompare(b)));
+    } catch {
+      setPresetNames([]);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) return;
+      const payload = JSON.parse(raw);
+      if (payload?.theme) setTheme(payload.theme);
+      if (payload?.paint) setPaint((p) => ({ ...p, ...payload.paint }));
+      if (payload?.ui?.activeLayer) setActiveLayer(payload.ui.activeLayer);
+      if (payload?.ui?.layerView) setLayerView(payload.ui.layerView);
+      if (typeof payload?.ui?.ghostOpacity === "number") setGhostOpacity(payload.ui.ghostOpacity);
+      if (payload?.settings) setS((prev) => ({ ...prev, ...payload.settings }));
+      if (payload?.cells?.melody) setCellsMel(payload.cells.melody);
+      if (payload?.cells?.percussion) setCellsPerc(payload.cells.percussion);
+      if (payload?.cells?.sampler) setCellsSampler(payload.cells.sampler);
+    } catch (err) {
+      console.warn("Failed to restore session", err);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(makePresetPayload()));
+    } catch (err) {
+      console.warn("Failed to persist session", err);
+    }
+  }, [s, theme, paint, cellsMel, cellsPerc, cellsSampler, makePresetPayload]);
+
+  const savePreset = React.useCallback(() => {
+    const name = presetName.trim();
+    if (!name) return;
+    try {
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      const presets = raw ? JSON.parse(raw) : {};
+      presets[name] = makePresetPayload();
+      localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+      setPresetNames(Object.keys(presets).sort((a, b) => a.localeCompare(b)));
+    } catch (err) {
+      console.warn("Failed to save preset", err);
+    }
+  }, [makePresetPayload, presetName]);
+
+  const loadPreset = React.useCallback((name) => {
+    if (!name) return;
+    try {
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      const presets = raw ? JSON.parse(raw) : {};
+      const payload = presets[name];
+      if (!payload) return;
+      setPresetName(name);
+      if (payload?.theme) setTheme(payload.theme);
+      if (payload?.paint) setPaint((p) => ({ ...p, ...payload.paint }));
+      if (payload?.ui?.activeLayer) setActiveLayer(payload.ui.activeLayer);
+      if (payload?.ui?.layerView) setLayerView(payload.ui.layerView);
+      if (typeof payload?.ui?.ghostOpacity === "number") setGhostOpacity(payload.ui.ghostOpacity);
+      if (payload?.settings) setS((prev) => ({ ...prev, ...payload.settings }));
+      setCellsMel(payload?.cells?.melody ?? []);
+      setCellsPerc(payload?.cells?.percussion ?? []);
+      setCellsSampler(payload?.cells?.sampler ?? []);
+    } catch (err) {
+      console.warn("Failed to load preset", err);
+    }
+  }, []);
+
+  const deletePreset = React.useCallback(() => {
+    const name = presetName.trim();
+    if (!name) return;
+    try {
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      const presets = raw ? JSON.parse(raw) : {};
+      delete presets[name];
+      localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+      const names = Object.keys(presets).sort((a, b) => a.localeCompare(b));
+      setPresetNames(names);
+      if (!names.includes(name)) setPresetName("");
+    } catch (err) {
+      console.warn("Failed to delete preset", err);
+    }
+  }, [presetName]);
+
+  const exportPresetFile = React.useCallback(() => {
+    const name = presetName.trim() || "grid-music-preset";
+    const blob = new Blob([JSON.stringify({ name, ...makePresetPayload() }, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name.replace(/[^a-z0-9-_]+/gi, "_").toLowerCase() || "grid-music-preset"}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [makePresetPayload, presetName]);
+
+  const importPresetFile = React.useCallback(
+    async (file) => {
+      if (!file) return;
+      try {
+        const raw = await file.text();
+        const payload = JSON.parse(raw);
+        const name = String(payload?.name || file.name.replace(/\.json$/i, "") || "Imported preset").trim();
+        const presetPayload = {
+          version: payload?.version ?? 1,
+          savedAt: payload?.savedAt ?? new Date().toISOString(),
+          theme: payload?.theme ?? theme,
+          paint: payload?.paint ?? paint,
+          ui: payload?.ui ?? {
+            activeLayer,
+            layerView,
+            ghostOpacity,
+          },
+          settings: { ...sRef.current, ...(payload?.settings ?? {}) },
+          cells: {
+            melody: payload?.cells?.melody ?? [],
+            percussion: payload?.cells?.percussion ?? [],
+            sampler: payload?.cells?.sampler ?? [],
+          },
+        };
+        const storedRaw = localStorage.getItem(PRESET_STORAGE_KEY);
+        const presets = storedRaw ? JSON.parse(storedRaw) : {};
+        presets[name] = presetPayload;
+        localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+        setPresetNames(Object.keys(presets).sort((a, b) => a.localeCompare(b)));
+        setPresetName(name);
+        loadPreset(name);
+      } catch (err) {
+        console.warn("Failed to import preset", err);
+      }
+    },
+    [activeLayer, ghostOpacity, layerView, loadPreset, paint, theme]
+  );
 
   return (
     <div className={`w-full h-[100svh] ${shellBg} flex flex-col md:flex-row overflow-hidden`}>
@@ -2436,6 +2814,79 @@ export default function App() {
           </button>
         </div>
 
+        {/* Presets */}
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider">Presets & Configurations</label>
+
+          <div className="space-y-2">
+            <input
+              type="text"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="Preset name"
+              className={`w-full px-3 py-2 border rounded-lg ${inputBg}`}
+            />
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={savePreset}
+                className={`px-3 py-2 rounded-lg text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 ${buttonPrimary}`}
+              >
+                <Save size={14} />
+                Save
+              </button>
+              <button
+                onClick={() => loadPreset(presetName)}
+                className={`px-3 py-2 rounded-lg text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 ${buttonMuted}`}
+              >
+                <FolderOpen size={14} />
+                Load
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={deletePreset}
+                className={`px-3 py-2 rounded-lg text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 ${buttonMuted}`}
+              >
+                <Trash2 size={14} />
+                Delete
+              </button>
+              <button
+                onClick={exportPresetFile}
+                className={`px-3 py-2 rounded-lg text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 ${buttonMuted}`}
+              >
+                <Download size={14} />
+                Export
+              </button>
+            </div>
+
+            <select
+              value={presetName}
+              onChange={(e) => {
+                setPresetName(e.target.value);
+                if (e.target.value) loadPreset(e.target.value);
+              }}
+              className={`w-full px-3 py-2 border rounded-lg ${inputBg}`}
+            >
+              <option value="">Saved presets…</option>
+              {presetNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+
+            <label className={`w-full px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 cursor-pointer ${buttonMuted}`}>
+              <Upload size={14} />
+              Import JSON
+              <input type="file" accept="application/json,.json" className="hidden" onChange={(e) => importPresetFile(e.target.files?.[0])} />
+            </label>
+
+            <div className={`text-[11px] ${subtleText}`}>Saves settings, theme, paint behavior, and all three layers. Last session auto-restores.</div>
+          </div>
+        </div>
+
         {/* Pattern */}
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wider">Pattern</label>
@@ -2466,33 +2917,27 @@ export default function App() {
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wider">Layer</label>
 
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setActiveLayer("melody")}
-              className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 ${
-                activeLayer === "melody"
-                  ? isDark
-                    ? "bg-white text-black border-white"
-                    : "bg-black text-white border-black"
-                  : inputBg
-              }`}
-            >
-              <Layers size={14} />
-              Melody
-            </button>
-            <button
-              onClick={() => setActiveLayer("perc")}
-              className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 ${
-                activeLayer === "perc"
-                  ? isDark
-                    ? "bg-white text-black border-white"
-                    : "bg-black text-white border-black"
-                  : inputBg
-              }`}
-            >
-              <Layers size={14} />
-              Perc
-            </button>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              ["melody", "Melody"],
+              ["perc", "Perc"],
+              ["sampler", "Sampler"],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setActiveLayer(key)}
+                className={`px-3 py-2 rounded-lg border text-xs font-semibold min-h-[44px] flex items-center justify-center gap-2 ${
+                  activeLayer === key
+                    ? isDark
+                      ? "bg-white text-black border-white"
+                      : "bg-black text-white border-black"
+                    : inputBg
+                }`}
+              >
+                <Layers size={14} />
+                {label}
+              </button>
+            ))}
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -3270,6 +3715,261 @@ export default function App() {
           </div>
 
           <div className={`text-[11px] ${subtleText}`}>Hue chooses drum type inside the kit. Sample mode pitches your WAV to match the chord tones.</div>
+        </div>
+
+        {/* Sampler */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wider">Sampler</label>
+            <button
+              onClick={() => setS((p) => ({ ...p, samplerOn: !p.samplerOn }))}
+              className={`p-1.5 rounded ${s.samplerOn ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+            >
+              {s.samplerOn ? <Play size={14} fill={isDark ? "black" : "white"} /> : <Square size={14} />}
+            </button>
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider">Sampler sample</div>
+            <div className={`text-[11px] ${subtleText}`}>{samplerSampleLabel}</div>
+            <input
+              type="file"
+              accept=".wav,audio/wav,.mp3,audio/mpeg,.aif,.aiff,audio/*"
+              onChange={(e) => onSamplerSampleUpload(e.target.files?.[0])}
+              className={`w-full text-xs ${subtleText}`}
+            />
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Sample root MIDI: {s.samplerRootMidi}</div>
+              <input
+                type="range"
+                min="0"
+                max="96"
+                step="1"
+                value={s.samplerRootMidi}
+                onChange={(e) => setS((p) => ({ ...p, samplerRootMidi: parseInt(e.target.value, 10) }))}
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Scan multiplier: {s.samplerRhythmMul.toFixed(2)}×</div>
+              <input
+                type="range"
+                min="0.5"
+                max="2.5"
+                step="0.05"
+                value={s.samplerRhythmMul}
+                onChange={(e) => setS((p) => ({ ...p, samplerRhythmMul: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Max hits / step: {s.samplerMaxHitsPerStep}</div>
+              <input
+                type="range"
+                min="1"
+                max="24"
+                step="1"
+                value={s.samplerMaxHitsPerStep}
+                onChange={(e) => setS((p) => ({ ...p, samplerMaxHitsPerStep: parseInt(e.target.value, 10) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Volume: {s.samplerVol.toFixed(2)}</div>
+              <input
+                type="range"
+                min="0"
+                max="1.5"
+                step="0.01"
+                value={s.samplerVol}
+                onChange={(e) => setS((p) => ({ ...p, samplerVol: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wider">Sampler progression</div>
+              <button
+                onClick={() => setS((p) => ({ ...p, samplerProgFollow: !p.samplerProgFollow }))}
+                className={`px-3 py-1.5 rounded text-xs font-semibold ${s.samplerProgFollow ? (isDark ? "bg-white text-black" : "bg-black text-white") : buttonMuted}`}
+              >
+                {s.samplerProgFollow ? "Follows Melody" : "Independent"}
+              </button>
+            </div>
+
+            {!s.samplerProgFollow && (
+              <>
+                <select
+                  onChange={(e) => setS((p) => ({ ...p, samplerProg: PROG_PRESETS[e.target.value] ?? p.samplerProg }))}
+                  className={`w-full px-2 py-2 border rounded-lg text-xs ${inputBg}`}
+                  defaultValue=""
+                >
+                  <option value="" disabled>
+                    Pick a preset…
+                  </option>
+                  {Object.keys(PROG_PRESETS).map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="space-y-1">
+                  <div className={`text-xs ${subtleText}`}>Degrees (comma-separated)</div>
+                  <input
+                    type="text"
+                    value={(Array.isArray(s.samplerProg) ? s.samplerProg : [0, 5, 3, 6]).join(",")}
+                    onChange={(e) =>
+                      setS((p) => ({
+                        ...p,
+                        samplerProg: String(e.target.value)
+                          .split(/[,\s]+/)
+                          .map((x) => parseInt(x, 10))
+                          .filter((n) => Number.isFinite(n)),
+                      }))
+                    }
+                    className={`w-full px-2 py-2 border rounded-lg text-xs font-mono ${inputBg}`}
+                    placeholder="0,5,3,6"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className={`text-xs ${subtleText}`}>Rate (columns per chord): {s.samplerProgRate}</div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="16"
+                    value={s.samplerProgRate}
+                    onChange={(e) => setS((p) => ({ ...p, samplerProgRate: parseInt(e.target.value, 10) }))}
+                    className="w-full"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-neutral-800 bg-neutral-900" : "border-neutral-200 bg-white"}`}>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Base MIDI: {s.samplerBaseMidi}</div>
+                <input
+                  type="range"
+                  min="12"
+                  max="84"
+                  step="1"
+                  value={s.samplerBaseMidi}
+                  onChange={(e) => setS((p) => ({ ...p, samplerBaseMidi: parseInt(e.target.value, 10) }))}
+                  className="w-full"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className={`text-xs ${subtleText}`}>Octave span: {s.samplerOctaveSpan}</div>
+                <input
+                  type="range"
+                  min="1"
+                  max="6"
+                  step="1"
+                  value={s.samplerOctaveSpan}
+                  onChange={(e) => setS((p) => ({ ...p, samplerOctaveSpan: parseInt(e.target.value, 10) }))}
+                  className="w-full"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Level: {s.samplerLevel.toFixed(2)}</div>
+              <input
+                type="range"
+                min="0"
+                max="3"
+                step="0.01"
+                value={s.samplerLevel}
+                onChange={(e) => setS((p) => ({ ...p, samplerLevel: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack base: {s.samplerAtkBase.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0.001"
+                max="0.08"
+                step="0.001"
+                value={s.samplerAtkBase}
+                onChange={(e) => setS((p) => ({ ...p, samplerAtkBase: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Attack span: {s.samplerAtkSpan.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0"
+                max="0.25"
+                step="0.001"
+                value={s.samplerAtkSpan}
+                onChange={(e) => setS((p) => ({ ...p, samplerAtkSpan: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay base: {s.samplerDecayBase.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0.02"
+                max="0.9"
+                step="0.005"
+                value={s.samplerDecayBase}
+                onChange={(e) => setS((p) => ({ ...p, samplerDecayBase: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Decay span: {s.samplerDecaySpan.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0"
+                max="2.2"
+                step="0.01"
+                value={s.samplerDecaySpan}
+                onChange={(e) => setS((p) => ({ ...p, samplerDecaySpan: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release base: {s.samplerRelBase.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0.02"
+                max="1.0"
+                step="0.01"
+                value={s.samplerRelBase}
+                onChange={(e) => setS((p) => ({ ...p, samplerRelBase: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className={`text-xs ${subtleText}`}>Release span: {s.samplerRelSpan.toFixed(3)}s</div>
+              <input
+                type="range"
+                min="0"
+                max="2.0"
+                step="0.01"
+                value={s.samplerRelSpan}
+                onChange={(e) => setS((p) => ({ ...p, samplerRelSpan: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          <div className={`text-[11px] ${subtleText}`}>Paint into the Sampler layer to add a pitched sample instrument on top of melody and percussion.</div>
         </div>
 
         {/* MIDI + FX sections unchanged from your code (kept as-is) */}
